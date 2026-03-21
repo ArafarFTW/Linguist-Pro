@@ -5,68 +5,13 @@ import mammoth from 'mammoth';
 import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
 
-import { translateText, detectLanguage, getChatbotResponse } from './services/geminiService';
+import { translateText, detectLanguage, getChatbotResponse, transcribeAudio } from './services/geminiService';
 import { LANGUAGES, ROLES } from './constants';
-import { SwapIcon, CopyIcon, CheckIcon, CloseIcon, MicrophoneIcon, UploadIcon, BookOpenIcon, ReuseIcon, TrashIcon, SpeakerIcon, ChatIcon, SendIcon, FullscreenIcon, MinimizeIcon } from './components/icons';
+import { UI_TRANSLATIONS, UILanguage } from './i18n';
+import { SwapIcon, CopyIcon, CheckIcon, CloseIcon, MicrophoneIcon, UploadIcon, BookOpenIcon, ReuseIcon, TrashIcon, SpeakerIcon, ChatIcon, SendIcon, FullscreenIcon, MinimizeIcon, ChevronDownIcon } from './components/icons';
 
 // Configure pdf.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
-
-// FIX: Add types for the Web Speech API, which are not included in standard DOM typings.
-interface SpeechRecognition extends EventTarget {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onstart: () => void;
-  onend: () => void;
-  onerror: (event: SpeechRecognitionErrorEvent) => void;
-  onresult: (event: SpeechRecognitionEvent) => void;
-  start: () => void;
-  stop: () => void;
-}
-
-interface SpeechRecognitionEvent extends Event {
-  readonly results: SpeechRecognitionResultList;
-}
-
-interface SpeechRecognitionResultList {
-  readonly [index: number]: SpeechRecognitionResult;
-  readonly length: number;
-  item(index: number): SpeechRecognitionResult;
-}
-
-interface SpeechRecognitionResult {
-  readonly [index: number]: SpeechRecognitionAlternative;
-  readonly length: number;
-  readonly isFinal: boolean;
-  item(index: number): SpeechRecognitionAlternative;
-}
-
-interface SpeechRecognitionAlternative {
-  readonly transcript: string;
-}
-
-interface SpeechRecognitionErrorEvent extends Event {
-  readonly error: string;
-}
-
-declare var SpeechRecognition: {
-  prototype: SpeechRecognition;
-  new (): SpeechRecognition;
-};
-
-declare var webkitSpeechRecognition: {
-  prototype: SpeechRecognition;
-  new (): SpeechRecognition;
-};
-
-// Extend the Window interface to include webkitSpeechRecognition
-declare global {
-  interface Window {
-    SpeechRecognition: typeof SpeechRecognition;
-    webkitSpeechRecognition: typeof SpeechRecognition;
-  }
-}
 
 // Type for Translation Memory entries
 interface TranslationEntry {
@@ -97,6 +42,7 @@ const Chatbot: React.FC<ChatbotProps> = ({ onClose }) => {
   ]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [useMaps, setUseMaps] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -116,7 +62,7 @@ const Chatbot: React.FC<ChatbotProps> = ({ onClose }) => {
     setIsLoading(true);
 
     try {
-      const { text, sources } = await getChatbotResponse(trimmedInput);
+      const { text, sources } = await getChatbotResponse(trimmedInput, useMaps);
       const botMessage: Message = { id: (Date.now() + 1).toString(), text, sender: 'bot', sources };
       setMessages(prev => [...prev, botMessage]);
     } catch (err) {
@@ -129,10 +75,21 @@ const Chatbot: React.FC<ChatbotProps> = ({ onClose }) => {
   };
 
   return (
-    <div className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 lg:bottom-24 lg:right-8 w-[calc(100%-2rem)] max-w-md h-[70vh] max-h-[600px] bg-slate-800 rounded-xl shadow-2xl flex flex-col z-50 animate-fade-in origin-bottom-right">
-      <header className="flex items-center justify-between p-4 bg-slate-900 rounded-t-xl border-b border-slate-700 flex-shrink-0">
-        <h2 className="text-lg font-semibold text-slate-100">AI Assistant</h2>
-        <button onClick={onClose} className="p-1 rounded-full text-slate-400 hover:bg-slate-700 hover:text-white transition-colors" title="Close chat">
+    <div className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 lg:bottom-24 lg:right-8 w-[calc(100%-2rem)] max-w-md h-[70vh] max-h-[600px] bg-white rounded-xl shadow-2xl flex flex-col z-50 animate-fade-in origin-bottom-right border border-slate-200">
+      <header className="flex items-center justify-between p-4 bg-slate-50 rounded-t-xl border-b border-slate-200 flex-shrink-0">
+        <div className="flex items-center gap-3">
+          <h2 className="text-lg font-semibold text-slate-900">AI Assistant</h2>
+          <label className="flex items-center gap-1.5 cursor-pointer text-xs">
+            <input 
+              type="checkbox" 
+              checked={useMaps} 
+              onChange={(e) => setUseMaps(e.target.checked)}
+              className="rounded text-sky-600 focus:ring-sky-500"
+            />
+            <span className="text-slate-600 font-medium">Use Maps</span>
+          </label>
+        </div>
+        <button onClick={onClose} className="p-1 rounded-full text-slate-500 hover:bg-slate-200 hover:text-slate-900 transition-colors" title="Close chat">
           <CloseIcon className="w-5 h-5" />
         </button>
       </header>
@@ -141,15 +98,15 @@ const Chatbot: React.FC<ChatbotProps> = ({ onClose }) => {
         <div className="space-y-4">
           {messages.map((msg) => (
             <div key={msg.id} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[85%] rounded-lg px-3 py-2 ${msg.sender === 'user' ? 'bg-sky-700 text-white' : 'bg-slate-700 text-slate-200'}`}>
+              <div className={`max-w-[85%] rounded-lg px-3 py-2 ${msg.sender === 'user' ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-800 border border-slate-200'}`}>
                 <p className="text-sm whitespace-pre-wrap break-words">{msg.text}</p>
                 {msg.sources && msg.sources.length > 0 && (
-                  <div className="mt-2 border-t border-slate-600/50 pt-2">
-                    <h4 className="text-xs font-bold text-slate-400 mb-1">Sources:</h4>
+                  <div className="mt-2 border-t border-slate-300 pt-2">
+                    <h4 className="text-xs font-bold text-slate-500 mb-1">Sources:</h4>
                     <ul className="space-y-1">
                       {msg.sources.map((source, index) => (
                         <li key={source.uri}>
-                          <a href={source.uri} target="_blank" rel="noopener noreferrer" className="text-xs text-sky-300 hover:underline truncate block" title={source.title}>
+                          <a href={source.uri} target="_blank" rel="noopener noreferrer" className="text-xs text-sky-600 hover:underline truncate block" title={source.title}>
                             {`[${index + 1}] ${source.title}`}
                           </a>
                         </li>
@@ -162,7 +119,7 @@ const Chatbot: React.FC<ChatbotProps> = ({ onClose }) => {
           ))}
           {isLoading && (
             <div className="flex justify-start">
-              <div className="max-w-[85%] rounded-lg px-3 py-2 bg-slate-700 text-slate-200">
+              <div className="max-w-[85%] rounded-lg px-3 py-2 bg-slate-100 text-slate-800 border border-slate-200">
                 <p className="text-sm animate-pulse">AI Assistant is thinking...</p>
               </div>
             </div>
@@ -171,18 +128,18 @@ const Chatbot: React.FC<ChatbotProps> = ({ onClose }) => {
         </div>
       </div>
 
-      <form onSubmit={handleSendMessage} className="p-4 border-t border-slate-700 bg-slate-900/50 rounded-b-xl flex-shrink-0">
+      <form onSubmit={handleSendMessage} className="p-4 border-t border-slate-200 bg-slate-50 rounded-b-xl flex-shrink-0">
         <div className="relative">
           <input
             type="text"
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             placeholder="Ask anything..."
-            className="w-full bg-slate-700 border border-slate-600 rounded-full py-2 pl-4 pr-12 text-sm focus:ring-2 focus:ring-sky-500 disabled:opacity-75"
+            className="w-full bg-white border border-slate-300 rounded-full py-2 pl-4 pr-12 text-sm focus:ring-2 focus:ring-sky-500 disabled:opacity-75 text-slate-900 placeholder:text-slate-400"
             disabled={isLoading}
             aria-label="Chat input"
           />
-          <button type="submit" disabled={!inputValue.trim() || isLoading} className="absolute right-1 top-1/2 -translate-y-1/2 p-2 rounded-full bg-sky-600 text-white disabled:bg-slate-600 disabled:cursor-not-allowed hover:bg-sky-500 transition-colors" title="Send message">
+          <button type="submit" disabled={!inputValue.trim() || isLoading} className="absolute right-1 top-1/2 -translate-y-1/2 p-2 rounded-full bg-sky-600 text-white disabled:bg-slate-300 disabled:cursor-not-allowed hover:bg-sky-500 transition-colors" title="Send message">
             <SendIcon className="w-5 h-5" />
           </button>
         </div>
@@ -219,6 +176,8 @@ const App: React.FC = () => {
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [isAutoDetectEnabled, setIsAutoDetectEnabled] = useState<boolean>(true);
   const [isAutoCorrectEnabled, setIsAutoCorrectEnabled] = useState<boolean>(true);
+  const [uiLanguage, setUiLanguage] = useState<UILanguage>('pt'); // Default to PT as requested
+  const [customProfession, setCustomProfession] = useState<string>('');
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean;
     title: string;
@@ -227,7 +186,8 @@ const App: React.FC = () => {
     onCancel: () => void;
   } | null>(null);
 
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workerRef = useRef<Worker | null>(null);
   const lastTranslatedTextRef = useRef<string>('');
@@ -377,7 +337,7 @@ const App: React.FC = () => {
       }
 
       try {
-        const { correctedSource, translation, phonetic } = await translateText(textToTranslate, sourceLang, targetLang, role, isThinkingMode, isAutoCorrectEnabled);
+        const { correctedSource, translation, phonetic } = await translateText(textToTranslate, sourceLang, targetLang, role, isThinkingMode, isAutoCorrectEnabled, customProfession);
         
         // Update the input text with the corrected source if it changed
         // ONLY if the user hasn't typed anything new while waiting for the API
@@ -428,45 +388,6 @@ const App: React.FC = () => {
     autoTranslate();
   }, [selectedText, debouncedInputText, sourceLang, targetLang, role, isThinkingMode, isAutoCorrectEnabled]);
   
-  // Effect for setting up Speech Recognition
-  useEffect(() => {
-    const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognitionAPI) {
-      const recognition = new SpeechRecognitionAPI();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      
-      recognition.onstart = () => setIsListening(true);
-      recognition.onend = () => setIsListening(false);
-      recognition.onerror = (event) => {
-        setError(`Speech recognition error: ${event.error}`);
-        setIsListening(false);
-      };
-      recognition.onresult = (event) => {
-        const transcript = Array.from(event.results)
-          .map(result => result[0])
-          .map(result => result.transcript)
-          .join('');
-        setInputText(transcript);
-      };
-      recognitionRef.current = recognition;
-    } else {
-      console.warn("Speech recognition not supported in this browser.");
-    }
-    
-    return () => {
-      recognitionRef.current?.stop();
-    };
-  }, []);
-
-  // Effect to update recognition language
-  useEffect(() => {
-    if (recognitionRef.current) {
-        const langObj = LANGUAGES.find(l => l.name === sourceLang);
-        recognitionRef.current.lang = langObj?.isoCode || 'en-US';
-    }
-  }, [sourceLang]);
-
   // Effect for speech synthesis cleanup
   useEffect(() => {
     return () => {
@@ -496,18 +417,55 @@ const App: React.FC = () => {
     }
   };
 
-  const handleToggleListen = () => {
-    if (!recognitionRef.current) return;
-    
+  const handleToggleListen = async () => {
     if (isListening) {
-      recognitionRef.current.stop();
+      mediaRecorderRef.current?.stop();
+      setIsListening(false);
     } else {
-      setInputText('');
-      setOutputText('');
-      setPhoneticText('');
-      setFileName(null);
-      setSelectedText('');
-      recognitionRef.current.start();
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mediaRecorder = new MediaRecorder(stream);
+        mediaRecorderRef.current = mediaRecorder;
+        audioChunksRef.current = [];
+
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            audioChunksRef.current.push(event.data);
+          }
+        };
+
+        mediaRecorder.onstop = async () => {
+          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+          const reader = new FileReader();
+          reader.readAsDataURL(audioBlob);
+          reader.onloadend = async () => {
+            const base64AudioMessage = reader.result as string;
+            const base64Audio = base64AudioMessage.split(',')[1];
+            try {
+              setIsLoading(true);
+              const transcription = await transcribeAudio(base64Audio, 'audio/webm');
+              if (transcription) {
+                setInputText(prev => prev ? `${prev} ${transcription}` : transcription);
+              }
+            } catch (err) {
+              setError("Failed to transcribe audio.");
+            } finally {
+              setIsLoading(false);
+            }
+          };
+          
+          // Stop all tracks to release microphone
+          stream.getTracks().forEach(track => track.stop());
+        };
+
+        mediaRecorder.start();
+        setIsListening(true);
+        setError(null);
+      } catch (err) {
+        console.error("Error accessing microphone:", err);
+        setError("Could not access microphone. Please check permissions.");
+        setIsListening(false);
+      }
     }
   };
 
@@ -756,52 +714,86 @@ const App: React.FC = () => {
     };
   }, []);
 
+  const t = UI_TRANSLATIONS[uiLanguage];
+
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-slate-200 font-sans flex flex-col items-center p-4 sm:p-6 lg:p-8 relative overflow-hidden">
+    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans flex flex-col items-center p-4 sm:p-6 lg:p-8 relative overflow-hidden">
       {/* Ambient Background */}
-      <div className="fixed inset-0 z-0 pointer-events-none bg-[radial-gradient(circle_at_50%_0%,_#1e293b_0%,_transparent_50%)] opacity-50"></div>
+      <div className="fixed inset-0 z-0 pointer-events-none bg-[radial-gradient(circle_at_50%_0%,_#e2e8f0_0%,_transparent_50%)] opacity-50"></div>
 
       <header className="w-full max-w-6xl text-center mb-10 relative z-10 flex flex-col items-center justify-center">
-        <div className="absolute right-0 top-0">
+        <div className="absolute right-0 top-0 flex items-center gap-3">
+          <div className="relative">
+            <select
+              value={uiLanguage}
+              onChange={(e) => setUiLanguage(e.target.value as UILanguage)}
+              className="appearance-none bg-white/50 hover:bg-white/80 border border-slate-200 text-slate-600 text-sm font-medium py-2 pl-3 pr-8 rounded-full shadow-sm focus:outline-none transition-colors cursor-pointer"
+            >
+              <option value="en">English</option>
+              <option value="pt">Português</option>
+            </select>
+            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-500">
+              <ChevronDownIcon className="w-4 h-4" />
+            </div>
+          </div>
           <button
             onClick={handleToggleFullscreen}
-            className="p-2 rounded-full bg-slate-800/50 hover:bg-slate-700/50 text-slate-300 transition-colors border border-white/5"
+            className="p-2 rounded-full bg-white/50 hover:bg-white/80 text-slate-500 transition-colors border border-slate-200 shadow-sm"
             title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
             aria-label="Toggle Fullscreen"
           >
             {isFullscreen ? <MinimizeIcon className="w-5 h-5" /> : <FullscreenIcon className="w-5 h-5" />}
           </button>
         </div>
-        <h1 className="text-4xl sm:text-5xl md:text-6xl font-serif font-semibold text-white tracking-tight mb-3">
-          Linguist<span className="text-sky-400 italic">Pro</span>
+        <h1 className="text-4xl sm:text-5xl md:text-6xl font-serif font-semibold text-slate-900 tracking-tight mb-3">
+          {t.appTitle.replace('Pro', '')}<span className="text-sky-600 italic">Pro</span>
         </h1>
-        <p className="text-slate-400 text-sm md:text-base uppercase tracking-widest font-medium">Tourism & Golf Translation Engine</p>
+        <p className="text-slate-500 text-sm md:text-base uppercase tracking-widest font-medium">{t.appSubtitle}</p>
       </header>
 
       <main className="w-full max-w-6xl flex flex-col gap-8 relative z-10">
-        <div className="glass-panel p-6 rounded-2xl shadow-2xl">
+        <div className="glass-panel p-6 rounded-2xl">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6">
               <div className="flex-grow">
-                <label htmlFor="role-selector" className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">
-                  Translation Persona
+                <label htmlFor="role-selector" className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
+                  {t.translationPersona}
                 </label>
-                <select
-                  id="role-selector"
-                  value={role}
-                  onChange={handleRoleChange}
-                  className="w-full glass-input text-white rounded-xl py-3 px-4 focus:outline-none transition duration-200 appearance-none cursor-pointer"
-                >
-                  {ROLES.map((r) => (
-                    <option key={r.name} value={r.name} className="bg-slate-800 text-white">
-                      {r.name}
+                <div className="relative">
+                  <select
+                    id="role-selector"
+                    value={role}
+                    onChange={handleRoleChange}
+                    className="w-full glass-input rounded-xl py-3 pl-4 pr-10 focus:outline-none transition duration-200 appearance-none cursor-pointer"
+                  >
+                    {ROLES.map((r) => (
+                      <option key={r.name} value={r.name} className="bg-white text-slate-900">
+                        {r.name}
+                      </option>
+                    ))}
+                    <option value="Custom Profession" className="bg-white text-slate-900 font-semibold">
+                      {t.customProfessionOption}
                     </option>
-                  ))}
-                </select>
+                  </select>
+                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-slate-500">
+                    <ChevronDownIcon className="w-5 h-5" />
+                  </div>
+                </div>
+                {role === 'Custom Profession' && (
+                  <div className="mt-3 animate-fade-in">
+                    <input
+                      type="text"
+                      value={customProfession}
+                      onChange={(e) => setCustomProfession(e.target.value)}
+                      placeholder={t.customProfessionPlaceholder}
+                      className="w-full glass-input rounded-xl py-3 px-4 focus:outline-none transition duration-200"
+                    />
+                  </div>
+                )}
               </div>
 
-              <div className="flex-shrink-0 sm:pt-7 flex flex-col gap-3">
-                <label htmlFor="autocorrect-toggle" className={`flex items-center cursor-pointer group ${isOfflineMode ? 'opacity-50 pointer-events-none' : ''}`} title="Automatically correct grammar and spelling of the input text before translating.">
-                    <span className="text-sm font-medium text-slate-300 mr-3 group-hover:text-white transition-colors">Auto-Correct</span>
+              <div className="flex-shrink-0 sm:pt-7 flex flex-col gap-3 min-w-[220px]">
+                <label htmlFor="autocorrect-toggle" className={`flex items-center justify-between p-2.5 rounded-xl border transition-colors cursor-pointer group ${isOfflineMode ? 'opacity-50 pointer-events-none' : ''} ${isAutoCorrectEnabled ? 'bg-indigo-50 border-indigo-200 shadow-sm' : 'bg-white/50 border-slate-200 hover:bg-indigo-50/50'}`} title="Automatically correct grammar and spelling of the input text before translating.">
+                    <span className={`text-sm font-medium mr-3 transition-colors ${isAutoCorrectEnabled ? 'text-indigo-700' : 'text-slate-600 group-hover:text-indigo-600'}`}>✨ {t.autoCorrect}</span>
                     <div className="relative">
                         <input
                             type="checkbox"
@@ -811,13 +803,13 @@ const App: React.FC = () => {
                             onChange={() => setIsAutoCorrectEnabled(prev => !prev)}
                             disabled={isOfflineMode}
                         />
-                        <div className="w-12 h-6 rounded-full glass-input peer-checked:bg-sky-500/80 transition-colors"></div>
-                        <div className="absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transform peer-checked:translate-x-6 transition-transform"></div>
+                        <div className="w-10 h-5 rounded-full bg-slate-200 peer-checked:bg-indigo-500 transition-colors"></div>
+                        <div className="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transform peer-checked:translate-x-5 transition-transform"></div>
                     </div>
                 </label>
 
-                <label htmlFor="thinking-mode-toggle" className={`flex items-center cursor-pointer group ${isOfflineMode ? 'opacity-50 pointer-events-none' : ''}`} title="Uses a more powerful model (gemini-2.5-pro) for complex, nuanced, or creative translations. Slower but more thorough.">
-                    <span className="text-sm font-medium text-slate-300 mr-3 group-hover:text-white transition-colors">Thinking Mode</span>
+                <label htmlFor="thinking-mode-toggle" className={`flex items-center justify-between p-2.5 rounded-xl border transition-colors cursor-pointer group ${isOfflineMode ? 'opacity-50 pointer-events-none' : ''} ${isThinkingMode ? 'bg-sky-50 border-sky-200 shadow-sm' : 'bg-white/50 border-slate-200 hover:bg-sky-50/50'}`} title={t.thinkingModeDesc}>
+                    <span className={`text-sm font-medium mr-3 transition-colors ${isThinkingMode ? 'text-sky-700' : 'text-slate-600 group-hover:text-sky-600'}`}>🧠 {t.thinkingMode}</span>
                     <div className="relative">
                         <input
                             type="checkbox"
@@ -827,13 +819,13 @@ const App: React.FC = () => {
                             onChange={() => setIsThinkingMode(prev => !prev)}
                             disabled={isOfflineMode}
                         />
-                        <div className="w-12 h-6 rounded-full glass-input peer-checked:bg-sky-500/80 transition-colors"></div>
-                        <div className="absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transform peer-checked:translate-x-6 transition-transform"></div>
+                        <div className="w-10 h-5 rounded-full bg-slate-200 peer-checked:bg-sky-500 transition-colors"></div>
+                        <div className="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transform peer-checked:translate-x-5 transition-transform"></div>
                     </div>
                 </label>
 
-                <label htmlFor="offline-mode-toggle" className="flex items-center cursor-pointer group" title="Uses local browser models for basic translation without internet. Requires downloading models (~50MB) on first use.">
-                    <span className="text-sm font-medium text-slate-300 mr-3 group-hover:text-white transition-colors">Offline Mode (Beta)</span>
+                <label htmlFor="offline-mode-toggle" className={`flex items-center justify-between p-2.5 rounded-xl border transition-colors cursor-pointer group ${isOfflineMode ? 'bg-emerald-50 border-emerald-200 shadow-sm' : 'bg-white/50 border-slate-200 hover:bg-emerald-50/50'}`} title={t.offlineModeDesc}>
+                    <span className={`text-sm font-medium mr-3 transition-colors ${isOfflineMode ? 'text-emerald-700' : 'text-slate-600 group-hover:text-emerald-600'}`}>🔌 {t.offlineMode}</span>
                     <div className="relative">
                         <input
                             type="checkbox"
@@ -842,29 +834,29 @@ const App: React.FC = () => {
                             checked={isOfflineMode}
                             onChange={() => setIsOfflineMode(prev => !prev)}
                         />
-                        <div className="w-12 h-6 rounded-full glass-input peer-checked:bg-emerald-500/80 transition-colors"></div>
-                        <div className="absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transform peer-checked:translate-x-6 transition-transform"></div>
+                        <div className="w-10 h-5 rounded-full bg-slate-200 peer-checked:bg-emerald-500 transition-colors"></div>
+                        <div className="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transform peer-checked:translate-x-5 transition-transform"></div>
                     </div>
                 </label>
               </div>
             </div>
-            <div className="mt-4 p-4 bg-black/20 rounded-xl min-h-[4rem] flex flex-col justify-center gap-2">
-                <p className="text-slate-300 text-sm leading-relaxed">
+            <div className="mt-4 p-4 bg-slate-100/50 rounded-xl min-h-[4rem] flex flex-col justify-center gap-2 border border-slate-200">
+                <p className="text-slate-600 text-sm leading-relaxed">
                   {isOfflineMode 
-                      ? <><strong className="font-semibold text-emerald-400">🔌 Offline Mode Enabled:</strong> Basic translation running entirely in your browser. Models will be downloaded automatically on first use. Note: Quality is lower than online mode and only certain language pairs (e.g., English to Spanish) are supported.</>
+                      ? <><strong className="font-semibold text-emerald-600">{t.offlineModeEnabled}</strong> {t.offlineModeEnabledDesc}</>
                       : isThinkingMode 
-                          ? <><strong className="font-semibold text-sky-400">🧠 Thinking Mode Enabled:</strong> Uses a more powerful model for complex, nuanced, or creative translations. This may be slower but provides more thorough results.</>
+                          ? <><strong className="font-semibold text-sky-600">{t.thinkingModeEnabled}</strong> {t.thinkingModeEnabledDesc}</>
                           : ROLES.find(r => r.name === role)?.description
                   }
                 </p>
                 {offlineProgress && (
                   <div className="w-full mt-2">
-                    <div className="flex justify-between text-xs text-slate-400 mb-1">
+                    <div className="flex justify-between text-xs text-slate-500 mb-1">
                       <span>{offlineProgress.status === 'loading' ? 'Initializing model...' : offlineProgress.status === 'progress' ? `Downloading ${offlineProgress.model || 'model'}...` : 'Translating...'}</span>
                       {offlineProgress.progress !== undefined && <span>{Math.round(offlineProgress.progress)}%</span>}
                     </div>
                     {offlineProgress.progress !== undefined && (
-                      <div className="w-full bg-slate-700 rounded-full h-1.5">
+                      <div className="w-full bg-slate-200 rounded-full h-1.5">
                         <div className="bg-emerald-500 h-1.5 rounded-full transition-all duration-300" style={{ width: `${offlineProgress.progress}%` }}></div>
                       </div>
                     )}
@@ -875,7 +867,7 @@ const App: React.FC = () => {
 
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_auto_1fr] gap-6 items-stretch">
           {/* Input Panel */}
-          <div className="flex flex-col gap-3 glass-panel p-5 rounded-2xl shadow-2xl">
+          <div className="flex flex-col gap-3 glass-panel p-5 rounded-2xl">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="relative flex-grow sm:max-w-[50%]">
                 <select
@@ -886,12 +878,12 @@ const App: React.FC = () => {
                     setIsAutoDetectEnabled(false);
                     setDetectedLangMessage('Manual selection');
                   }}
-                  className="w-full glass-input text-white rounded-xl py-3 px-4 pr-10 focus:outline-none transition duration-200 appearance-none cursor-pointer font-medium"
+                  className="w-full glass-input rounded-xl py-3 px-4 pr-10 focus:outline-none transition duration-200 appearance-none cursor-pointer font-medium"
                 >
-                  {LANGUAGES.map((lang) => <option key={lang.name} value={lang.name} className="bg-slate-800">{lang.name}</option>)}
+                  {LANGUAGES.map((lang) => <option key={lang.name} value={lang.name} className="bg-white">{lang.name}</option>)}
                 </select>
                 <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none flex items-center">
-                  <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
+                  <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
                 </div>
               </div>
               <div className="flex items-center justify-end gap-2 text-xs font-medium text-slate-500 min-h-[1rem] uppercase tracking-wider">
@@ -899,10 +891,10 @@ const App: React.FC = () => {
                   <div className="w-4 h-4 rounded-full border-2 border-sky-500 border-t-transparent animate-spin" title="Detecting language..."></div>
                 )}
                 {!isDetecting && detectedLangMessage?.startsWith('Detected:') && (
-                  <CheckIcon className="w-4 h-4 text-emerald-400" title="Language auto-detected" />
+                  <CheckIcon className="w-4 h-4 text-emerald-600" title="Language auto-detected" />
                 )}
                 {detectedLangMessage && (
-                  <span className={`${isDetecting ? 'animate-pulse text-sky-400' : detectedLangMessage.startsWith('Uncertain') ? 'text-amber-400' : 'text-emerald-400'}`}>{detectedLangMessage}</span>
+                  <span className={`${isDetecting ? 'animate-pulse text-sky-600' : detectedLangMessage.startsWith('Uncertain') ? 'text-amber-600' : 'text-emerald-600'}`}>{detectedLangMessage}</span>
                 )}
                 {detectedLangMessage?.startsWith('Uncertain') && (
                   <button 
@@ -911,7 +903,7 @@ const App: React.FC = () => {
                       setDetectedLangMessage('Manual override');
                       document.getElementById('source-lang')?.focus();
                     }}
-                    className="px-2 py-1 bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 rounded-md transition-colors"
+                    className="px-2 py-1 bg-amber-100 text-amber-700 hover:bg-amber-200 rounded-md transition-colors"
                   >
                     Override
                   </button>
@@ -925,13 +917,13 @@ const App: React.FC = () => {
                 onMouseUp={handleSelectionChange}
                 onKeyUp={handleSelectionChange}
                 placeholder="Type, paste, or dictate text to translate automatically..."
-                className="w-full flex-grow min-h-[300px] glass-input text-white rounded-xl p-5 pr-16 resize-none focus:outline-none transition duration-200 text-lg leading-relaxed placeholder:text-slate-500"
+                className="w-full flex-grow min-h-[300px] glass-input rounded-xl p-5 pr-16 resize-none focus:outline-none transition duration-200 text-lg leading-relaxed placeholder:text-slate-400"
               />
               <div className="absolute top-4 right-4 flex flex-col gap-2">
                 {inputText && (
                   <button
                     onClick={handleClearInput}
-                    className="p-2 text-slate-400 hover:text-white transition-colors rounded-full hover:bg-white/10 backdrop-blur-sm"
+                    className="p-2 text-slate-400 hover:text-slate-900 transition-colors rounded-full hover:bg-slate-200/50 backdrop-blur-sm"
                     title="Clear text"
                   >
                     <CloseIcon className="w-5 h-5" />
@@ -939,9 +931,8 @@ const App: React.FC = () => {
                 )}
                 <button 
                   onClick={handleToggleListen}
-                  className={`p-2 text-slate-400 hover:text-white transition-colors rounded-full backdrop-blur-sm ${isListening ? 'bg-red-500/50 text-white animate-pulse' : 'hover:bg-white/10'}`}
+                  className={`p-2 text-slate-400 hover:text-slate-900 transition-colors rounded-full backdrop-blur-sm ${isListening ? 'bg-red-500/50 text-white animate-pulse' : 'hover:bg-slate-200/50'}`}
                   title={isListening ? 'Stop listening' : 'Start listening'}
-                  disabled={!recognitionRef.current}
                 >
                     <MicrophoneIcon className="w-5 h-5" />
                 </button>
@@ -953,7 +944,7 @@ const App: React.FC = () => {
           <div className="flex flex-row lg:flex-col items-center justify-center gap-4 my-2 lg:my-0">
              <button
               onClick={handleSwapLanguages}
-              className="p-4 rounded-full glass-panel hover:bg-white/10 text-slate-300 hover:text-white transition-all duration-300 hover:scale-105 shadow-xl"
+              className="p-4 rounded-full glass-panel hover:bg-slate-200/50 text-slate-500 hover:text-slate-900 transition-all duration-300 hover:scale-105 shadow-sm"
               title="Swap languages"
             >
               <SwapIcon className="w-6 h-6" />
@@ -968,17 +959,17 @@ const App: React.FC = () => {
                 />
                 <button
                     onClick={handleUploadClick}
-                    className="flex flex-col items-center justify-center gap-2 p-4 rounded-2xl glass-panel hover:bg-white/10 text-slate-300 hover:text-white transition-all duration-300 hover:scale-105 shadow-xl"
-                    title="Upload a document"
+                    className="flex flex-col items-center justify-center gap-2 p-4 rounded-2xl glass-panel hover:bg-slate-200/50 text-slate-500 hover:text-slate-900 transition-all duration-300 hover:scale-105 shadow-sm"
+                    title={t.uploadDoc}
                 >
                     <UploadIcon className="w-6 h-6" />
-                    <span className="text-xs font-medium uppercase tracking-wider hidden lg:block">Upload</span>
+                    <span className="text-xs font-medium uppercase tracking-wider hidden lg:block">{t.uploadDoc.split(' ')[0]}</span>
                 </button>
                 {fileName && (
-                    <div className="mt-3 text-xs text-slate-400 flex items-center justify-center gap-1 bg-black/30 px-2 py-1 rounded-full">
+                    <div className="mt-3 text-xs text-slate-500 flex items-center justify-center gap-1 bg-slate-200/50 px-2 py-1 rounded-full">
                         <span className="truncate max-w-[80px]" title={fileName}>{fileName}</span>
-                        <button onClick={handleClearFile} title="Clear file" className="p-0.5 rounded-full hover:bg-white/10">
-                            <CloseIcon className="w-3 h-3 text-red-400 hover:text-red-300" />
+                        <button onClick={handleClearFile} title={t.clear} className="p-0.5 rounded-full hover:bg-slate-300/50">
+                            <CloseIcon className="w-3 h-3 text-red-500 hover:text-red-600" />
                         </button>
                     </div>
                 )}
@@ -986,27 +977,27 @@ const App: React.FC = () => {
           </div>
 
           {/* Output Panel */}
-          <div className="flex flex-col gap-3 glass-panel p-5 rounded-2xl shadow-2xl">
+          <div className="flex flex-col gap-3 glass-panel p-5 rounded-2xl">
             <select
               id="target-lang"
               value={targetLang}
               onChange={(e) => setTargetLang(e.target.value)}
-              className="w-full glass-input text-white rounded-xl py-3 px-4 focus:outline-none transition duration-200 appearance-none cursor-pointer font-medium"
+              className="w-full glass-input rounded-xl py-3 px-4 focus:outline-none transition duration-200 appearance-none cursor-pointer font-medium"
             >
-              {LANGUAGES.map((lang) => <option key={lang.name} value={lang.name} className="bg-slate-800">{lang.name}</option>)}
+              {LANGUAGES.map((lang) => <option key={lang.name} value={lang.name} className="bg-white">{lang.name}</option>)}
             </select>
-            <div className="relative flex-grow flex flex-col bg-black/20 rounded-xl border border-white/5 overflow-hidden">
+            <div className="relative flex-grow flex flex-col bg-slate-100/50 rounded-xl border border-slate-200 overflow-hidden">
               <textarea
                 value={outputText}
                 readOnly
-                placeholder="Translation will appear here automatically..."
-                className={`w-full flex-grow min-h-[300px] bg-transparent p-5 resize-none focus:outline-none text-lg leading-relaxed text-emerald-50 placeholder:text-slate-600 ${isLoading ? 'opacity-50' : ''}`}
+                placeholder={t.targetText + "..."}
+                className={`w-full flex-grow min-h-[300px] bg-transparent p-5 resize-none focus:outline-none text-lg leading-relaxed text-slate-900 placeholder:text-slate-400 ${isLoading ? 'opacity-50' : ''}`}
               />
               {isLoading && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/10 backdrop-blur-[1px] pointer-events-none">
+                <div className="absolute inset-0 flex items-center justify-center bg-white/50 backdrop-blur-[1px] pointer-events-none">
                   <div className="flex flex-col items-center gap-3">
-                    <div className="w-8 h-8 rounded-full border-2 border-sky-500 border-t-transparent animate-spin shadow-[0_0_15px_rgba(14,165,233,0.5)]"></div>
-                    <span className="text-sky-400 font-medium text-sm uppercase tracking-widest animate-pulse drop-shadow-md">Translating</span>
+                    <div className="w-8 h-8 rounded-full border-2 border-sky-500 border-t-transparent animate-spin shadow-[0_0_15px_rgba(14,165,233,0.2)]"></div>
+                    <span className="text-sky-600 font-medium text-sm uppercase tracking-widest animate-pulse drop-shadow-sm">{t.translating}</span>
                   </div>
                 </div>
               )}
@@ -1015,8 +1006,8 @@ const App: React.FC = () => {
                     <div className="relative">
                       <button 
                           onClick={handleSpeak} 
-                          className={`p-2 rounded-full backdrop-blur-sm transition-colors ${isSpeaking ? 'text-sky-400 bg-white/10 animate-pulse' : 'text-slate-400 hover:text-white hover:bg-white/10'}`} 
-                          title={isSpeaking ? "Stop speaking" : "Listen to translation"}
+                          className={`p-2 rounded-full backdrop-blur-sm transition-colors ${isSpeaking ? 'text-sky-600 bg-slate-200/50 animate-pulse' : 'text-slate-400 hover:text-slate-900 hover:bg-slate-200/50'}`} 
+                          title={isSpeaking ? t.stop : t.listen}
                           disabled={!('speechSynthesis' in window)}
                       >
                           <SpeakerIcon className="w-5 h-5" />
@@ -1024,35 +1015,35 @@ const App: React.FC = () => {
                     </div>
                     <button 
                         onClick={handleCopyToClipboard} 
-                        className="p-2 rounded-full text-slate-400 hover:text-white hover:bg-white/10 backdrop-blur-sm transition-colors" 
-                        title="Copy to clipboard"
+                        className="p-2 rounded-full text-slate-400 hover:text-slate-900 hover:bg-slate-200/50 backdrop-blur-sm transition-colors" 
+                        title={t.copy}
                     >
-                        {hasCopied ? <CheckIcon className="w-5 h-5 text-emerald-400" /> : <CopyIcon className="w-5 h-5" />}
+                        {hasCopied ? <CheckIcon className="w-5 h-5 text-emerald-600" /> : <CopyIcon className="w-5 h-5" />}
                     </button>
                   </div>
                )}
                 {phoneticText && !isLoading && (
-                    <div className="w-full px-5 py-4 border-t border-white/10 bg-black/40">
-                        <div className="text-[10px] font-bold uppercase tracking-widest text-sky-400/70 mb-2 flex items-center gap-2">
-                            Phonetic Transcription
+                    <div className="w-full px-5 py-4 border-t border-slate-200 bg-slate-50/80">
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-sky-600/70 mb-2 flex items-center gap-2">
+                            {t.phoneticTranscription}
                         </div>
                         <div className="flex items-start gap-3">
                             <button
                                 onClick={handleSpeak}
                                 disabled={!('speechSynthesis' in window) || isSpeaking}
-                                className="mt-0.5 p-1.5 -ml-1.5 rounded-full hover:bg-sky-500/20 transition-colors disabled:cursor-not-allowed flex-shrink-0"
+                                className="mt-0.5 p-1.5 -ml-1.5 rounded-full hover:bg-sky-100 transition-colors disabled:cursor-not-allowed flex-shrink-0"
                                 title="Listen to pronunciation"
                             >
-                                <SpeakerIcon className={`w-4 h-4 ${isSpeaking ? 'text-sky-400 animate-pulse' : 'text-sky-400/50'}`} />
+                                <SpeakerIcon className={`w-4 h-4 ${isSpeaking ? 'text-sky-600 animate-pulse' : 'text-sky-600/50'}`} />
                             </button>
-                            <span className="text-sky-200/90 font-mono text-sm leading-relaxed break-words">{phoneticText}</span>
+                            <span className="text-sky-800/90 font-mono text-sm leading-relaxed break-words">{phoneticText}</span>
                         </div>
                     </div>
                 )}
             </div>
              <div className="flex justify-between items-center text-xs font-medium text-slate-500 min-h-[1rem] uppercase tracking-wider">
                 <div className="flex items-center gap-3">
-                  <label htmlFor="speech-rate" className="text-slate-400 flex items-center gap-2">
+                  <label htmlFor="speech-rate" className="text-slate-500 flex items-center gap-2">
                     <SpeakerIcon className="w-3 h-3" />
                     Speed: {speechRate}x
                   </label>
@@ -1064,7 +1055,7 @@ const App: React.FC = () => {
                     step="0.25" 
                     value={speechRate} 
                     onChange={(e) => setSpeechRate(parseFloat(e.target.value))}
-                    className="w-24 h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-sky-500"
+                    className="w-24 h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-sky-500"
                     title="Adjust speech rate"
                   />
                 </div>
@@ -1079,11 +1070,11 @@ const App: React.FC = () => {
         </div>
 
         {error && (
-            <div className="relative mt-2 text-left p-4 pr-12 bg-red-900/40 border border-red-500/30 text-red-200 rounded-xl backdrop-blur-md">
+            <div className="relative mt-2 text-left p-4 pr-12 bg-red-50 border border-red-200 text-red-800 rounded-xl backdrop-blur-md">
                 <strong className="font-semibold">Error:</strong> {error}
                 <button 
                   onClick={() => setError(null)}
-                  className="absolute top-1/2 right-4 -translate-y-1/2 p-1.5 rounded-full text-red-300 hover:bg-red-500/20 hover:text-white transition-colors"
+                  className="absolute top-1/2 right-4 -translate-y-1/2 p-1.5 rounded-full text-red-500 hover:bg-red-100 hover:text-red-700 transition-colors"
                   aria-label="Dismiss error"
                   title="Dismiss error"
                 >
@@ -1093,56 +1084,56 @@ const App: React.FC = () => {
         )}
 
         {/* Translation Memory Section */}
-        <div className="glass-panel rounded-2xl shadow-2xl overflow-hidden">
+        <div className="glass-panel rounded-2xl overflow-hidden">
           <button
             onClick={handleToggleMemory}
-            className="w-full flex justify-between items-center p-5 text-left font-serif text-xl hover:bg-white/5 transition-colors"
+            className="w-full flex justify-between items-center p-5 text-left font-serif text-xl hover:bg-slate-100/50 transition-colors"
             aria-expanded={isMemoryVisible}
             title={isMemoryVisible ? 'Hide Translation Memory' : 'Show Translation Memory'}
           >
-            <span className="flex items-center gap-3 text-white">
-              <BookOpenIcon className="w-6 h-6 text-sky-400"/>
-              Translation Memory <span className="text-sm font-sans text-slate-400 bg-black/30 px-2 py-0.5 rounded-full">{translationMemory.length}</span>
+            <span className="flex items-center gap-3 text-slate-900">
+              <BookOpenIcon className="w-6 h-6 text-sky-600"/>
+              {t.history} <span className="text-sm font-sans text-slate-500 bg-slate-200/50 px-2 py-0.5 rounded-full">{translationMemory.length}</span>
             </span>
             <span className={`transform transition-transform duration-300 text-slate-400 ${isMemoryVisible ? 'rotate-180' : ''}`}>
               ▼
             </span>
           </button>
           {isMemoryVisible && (
-            <div className="p-5 border-t border-white/5 bg-black/10">
+            <div className="p-5 border-t border-slate-200 bg-slate-50/50">
               <div className="flex flex-col sm:flex-row gap-4 mb-6">
                   <input
                     type="text"
                     placeholder="Search memory..."
                     value={memorySearchQuery}
                     onChange={(e) => setMemorySearchQuery(e.target.value)}
-                    className="flex-grow glass-input text-white rounded-xl py-3 px-4 focus:outline-none placeholder:text-slate-500"
+                    className="flex-grow glass-input rounded-xl py-3 px-4 focus:outline-none placeholder:text-slate-400 text-slate-900"
                     aria-label="Search translation memory"
                   />
                   <button 
                     onClick={handleClearMemory}
                     disabled={translationMemory.length === 0}
-                    className="flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-red-500/20 hover:bg-red-500/30 text-red-200 border border-red-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                      <TrashIcon className="w-5 h-5"/> Clear All
+                      <TrashIcon className="w-5 h-5"/> {t.clear} All
                   </button>
               </div>
 
               <div className="max-h-96 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
                 {filteredMemory.length > 0 ? (
                   filteredMemory.map(entry => (
-                    <div key={entry.id} className="bg-black/20 border border-white/5 p-4 rounded-xl flex flex-col md:flex-row justify-between items-start gap-4 hover:bg-black/30 transition-colors">
+                    <div key={entry.id} className="bg-white border border-slate-200 p-4 rounded-xl flex flex-col md:flex-row justify-between items-start gap-4 hover:bg-slate-50 transition-colors shadow-sm">
                       <div className="flex-grow">
-                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">{entry.sourceLang} → {entry.targetLang} <span className="text-sky-400/70 ml-2">({entry.role})</span></p>
-                        <p className="text-slate-300 mb-3 text-sm leading-relaxed break-words">{entry.sourceText}</p>
-                        <p className="text-emerald-100 text-sm leading-relaxed break-words">{entry.targetText}</p>
-                        {entry.phoneticText && <p className="text-sky-300/70 font-mono text-xs italic mt-2 break-words">{entry.phoneticText}</p>}
+                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">{entry.sourceLang} → {entry.targetLang} <span className="text-sky-600/70 ml-2">({entry.role})</span></p>
+                        <p className="text-slate-700 mb-3 text-sm leading-relaxed break-words">{entry.sourceText}</p>
+                        <p className="text-emerald-800 text-sm leading-relaxed break-words">{entry.targetText}</p>
+                        {entry.phoneticText && <p className="text-sky-700/70 font-mono text-xs italic mt-2 break-words">{entry.phoneticText}</p>}
                       </div>
                       <div className="flex-shrink-0 flex items-center gap-2 self-start md:self-center">
-                         <button onClick={() => handleReuseMemoryEntry(entry)} className="p-2.5 rounded-full hover:bg-white/10 transition-colors" title="Reuse translation">
-                           <ReuseIcon className="w-5 h-5 text-sky-400"/>
+                         <button onClick={() => handleReuseMemoryEntry(entry)} className="p-2.5 rounded-full hover:bg-slate-100 transition-colors" title={t.reuse}>
+                           <ReuseIcon className="w-5 h-5 text-sky-600"/>
                          </button>
-                         <button onClick={() => handleDeleteMemoryEntry(entry.id)} className="p-2.5 rounded-full hover:bg-red-500/10 text-red-400 transition-colors" title="Remove entry">
+                         <button onClick={() => handleDeleteMemoryEntry(entry.id)} className="p-2.5 rounded-full hover:bg-red-50 text-red-500 transition-colors" title={t.delete}>
                            <CloseIcon className="w-5 h-5"/>
                          </button>
                       </div>
@@ -1150,7 +1141,7 @@ const App: React.FC = () => {
                   ))
                 ) : (
                   <div className="text-center text-slate-500 py-10 font-medium">
-                    {translationMemory.length === 0 ? "Your translation memory is empty. New translations will be saved here." : "No results found."}
+                    {translationMemory.length === 0 ? t.noHistory : "No results found."}
                   </div>
                 )}
               </div>
@@ -1162,7 +1153,7 @@ const App: React.FC = () => {
       {/* Chatbot Feature */}
       <button
           onClick={handleToggleChat}
-          className="fixed bottom-6 right-6 lg:bottom-10 lg:right-10 z-40 w-16 h-16 bg-gradient-to-tr from-sky-600 to-emerald-500 rounded-full shadow-[0_0_30px_rgba(14,165,233,0.3)] flex items-center justify-center text-white hover:shadow-[0_0_40px_rgba(14,165,233,0.5)] transition-all duration-300 transform hover:scale-110 border border-white/20"
+          className="fixed bottom-6 right-6 lg:bottom-10 lg:right-10 z-40 w-16 h-16 bg-gradient-to-tr from-sky-600 to-emerald-500 rounded-full shadow-[0_4px_20px_rgba(14,165,233,0.3)] flex items-center justify-center text-white hover:shadow-[0_4px_25px_rgba(14,165,233,0.4)] transition-all duration-300 transform hover:scale-110 border border-white/20"
           title={isChatVisible ? "Close AI Assistant" : "Open AI Assistant"}
           aria-label="Toggle AI Assistant"
       >
@@ -1173,27 +1164,34 @@ const App: React.FC = () => {
 
       {/* Confirmation Dialog */}
       {confirmDialog?.isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl max-w-md w-full p-6 animate-in fade-in zoom-in-95 duration-200">
-            <h3 className="text-xl font-semibold text-white mb-2">{confirmDialog.title}</h3>
-            <p className="text-slate-300 mb-6">{confirmDialog.message}</p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="bg-white border border-slate-200 rounded-2xl shadow-2xl max-w-md w-full p-6 animate-in fade-in zoom-in-95 duration-200">
+            <h3 className="text-xl font-semibold text-slate-900 mb-2">{confirmDialog.title}</h3>
+            <p className="text-slate-600 mb-6">{confirmDialog.message}</p>
             <div className="flex justify-end gap-3">
               <button
                 onClick={confirmDialog.onCancel}
-                className="px-4 py-2 rounded-xl text-slate-300 hover:bg-slate-700 transition-colors font-medium"
+                className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 transition-colors font-medium"
               >
-                Cancel
+                {t.cancel}
               </button>
               <button
                 onClick={confirmDialog.onConfirm}
-                className="px-4 py-2 rounded-xl bg-red-500 hover:bg-red-600 text-white transition-colors font-medium shadow-lg shadow-red-500/20"
+                className="px-4 py-2 rounded-xl bg-red-500 hover:bg-red-600 text-white transition-colors font-medium shadow-sm shadow-red-500/20"
               >
-                Clear
+                {t.clear}
               </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* Footer */}
+      <footer className="w-full max-w-6xl text-center py-6 mt-4 relative z-10">
+        <p className="text-slate-400 text-sm font-medium tracking-wide">
+          By Senuenso Corpor.&trade;
+        </p>
+      </footer>
     </div>
   );
 };

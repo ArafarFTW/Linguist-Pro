@@ -49,13 +49,22 @@ export async function translateText(
     targetLang: string,
     role: string,
     isThinkingMode: boolean,
-    isAutoCorrectEnabled: boolean = true
+    isAutoCorrectEnabled: boolean = true,
+    customProfession?: string
 ): Promise<TranslationResponse> {
     try {
-        const roleObj = ROLES.find(r => r.name === role);
-        const roleDescription = roleObj ? roleObj.description : '';
+        let roleDescription = '';
+        let roleName = role;
         
-        let systemInstruction = `You are an expert linguist and ${role}. ${roleDescription} `;
+        if (role === 'Custom Profession' && customProfession) {
+            roleName = customProfession;
+            roleDescription = `You are an expert in the field of ${customProfession}. Translate the text using the precise terminology, tone, and style appropriate for a professional in this field.`;
+        } else {
+            const roleObj = ROLES.find(r => r.name === role);
+            roleDescription = roleObj ? roleObj.description : '';
+        }
+        
+        let systemInstruction = `You are an expert linguist and ${roleName}. ${roleDescription} `;
         
         if (isAutoCorrectEnabled) {
             systemInstruction += `Your task is to first correct any grammatical, spelling, or stylistic errors in the original source text to make it sound natural and professional in its original language. Then, provide an expert-level translation of this corrected text and its corresponding International Phonetic Alphabet (IPA) transcription.
@@ -73,7 +82,7 @@ export async function translateText(
         
         const prompt = `Translate the following text from ${sourceLang} to ${targetLang}:\n\n"${text}"`;
 
-        const modelName = isThinkingMode ? 'gemini-3.1-pro-preview' : 'gemini-3-flash-preview';
+        const modelName = isThinkingMode ? 'gemini-3.1-pro-preview' : 'gemini-3.1-flash-lite-preview';
         
         const modelConfig: any = {
             systemInstruction: systemInstruction,
@@ -125,6 +134,26 @@ export async function translateText(
 }
 
 
+export async function transcribeAudio(base64Audio: string, mimeType: string): Promise<string> {
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-3-flash-preview',
+            contents: [
+                {
+                    inlineData: {
+                        data: base64Audio,
+                        mimeType: mimeType,
+                    }
+                },
+                "Transcribe the audio accurately. Respond ONLY with the transcription."
+            ]
+        });
+        return response.text.trim();
+    } catch (error) {
+        handleApiError(error, 'audio transcription' as any);
+    }
+}
+
 export async function detectLanguage(
     text: string,
     possibleLanguages: string[]
@@ -162,16 +191,26 @@ interface ChatbotResponse {
     sources: { uri: string; title: string }[];
 }
 
-export async function getChatbotResponse(prompt: string): Promise<ChatbotResponse> {
+export async function getChatbotResponse(prompt: string, useMaps: boolean = false): Promise<ChatbotResponse> {
     try {
         const systemInstruction = `You are an official translator, having all languages of the world as your field, but having as an initial basis always the translation from Portuguese of Portugal to English of England, always using a professional language linked to tourism in general and golf in particular. You can also answer questions and provide information related to these fields.`;
+        
+        const model = useMaps ? "gemini-2.5-flash" : "gemini-3.1-pro-preview";
+        const tools = useMaps ? [{ googleMaps: {} }] : [{ googleSearch: {} }];
+        
+        const config: any = {
+            systemInstruction: systemInstruction,
+            tools: tools,
+        };
+
+        if (!useMaps) {
+            config.thinkingConfig = { thinkingLevel: ThinkingLevel.HIGH };
+        }
+        
         const response = await ai.models.generateContent({
-            model: "gemini-3-flash-preview",
+            model: model,
             contents: prompt,
-            config: {
-                systemInstruction: systemInstruction,
-                tools: [{ googleSearch: {} }],
-            },
+            config: config,
         });
 
         const text = response.text;
@@ -185,6 +224,11 @@ export async function getChatbotResponse(prompt: string): Promise<ChatbotRespons
                         uri: chunk.web.uri,
                         title: chunk.web.title,
                     });
+                } else if (chunk.maps && chunk.maps.uri && chunk.maps.title) {
+                    sources.push({
+                        uri: chunk.maps.uri,
+                        title: chunk.maps.title,
+                    });
                 }
             }
         }
@@ -192,6 +236,6 @@ export async function getChatbotResponse(prompt: string): Promise<ChatbotRespons
         return { text, sources };
 
     } catch (error) {
-        handleApiError(error, 'chatbot');
+        handleApiError(error, 'chatbot' as any);
     }
 }
