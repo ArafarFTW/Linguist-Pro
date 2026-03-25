@@ -60,7 +60,7 @@ export async function translateText(
             roleName = customProfession;
             roleDescription = `You are an expert in the field of ${customProfession}. Translate the text using the precise terminology, tone, and style appropriate for a professional in this field.`;
         } else {
-            const roleObj = ROLES.find(r => r.name === role);
+            const roleObj = ROLES.find(r => r.id === role);
             roleDescription = roleObj ? roleObj.description : '';
         }
         
@@ -82,7 +82,7 @@ export async function translateText(
         
         const prompt = `Translate the following text from ${sourceLang} to ${targetLang}:\n\n"${text}"`;
 
-        const modelName = isThinkingMode ? 'gemini-3.1-pro-preview' : 'gemini-3.1-flash-lite-preview';
+        const modelName = isThinkingMode ? 'gemini-3.1-pro-preview' : 'gemini-3-flash-preview';
         
         const modelConfig: any = {
             systemInstruction: systemInstruction,
@@ -109,7 +109,7 @@ export async function translateText(
         };
 
         if (isThinkingMode) {
-            modelConfig.thinkingConfig = { thinkingLevel: ThinkingLevel.HIGH };
+            modelConfig.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
         }
 
         const response = await ai.models.generateContent({
@@ -148,7 +148,7 @@ export async function generateRepurposedContent(
             roleName = customProfession;
             roleDescription = `You are an expert in the field of ${customProfession}.`;
         } else {
-            const roleObj = ROLES.find(r => r.name === role);
+            const roleObj = ROLES.find(r => r.id === role);
             roleDescription = roleObj ? roleObj.description : '';
         }
 

@@ -7,7 +7,7 @@ let translator: any = null;
 let currentModel = '';
 
 self.addEventListener('message', async (event) => {
-    const { text, src, tgt } = event.data;
+    const { text, src, tgt, id } = event.data;
 
     // Map languages to Opus-MT codes
     const langMap: Record<string, string> = {
@@ -31,7 +31,7 @@ self.addEventListener('message', async (event) => {
     const tgtCode = langMap[tgt];
 
     if (!srcCode || !tgtCode) {
-        self.postMessage({ status: 'error', error: 'Unsupported language pair for offline translation.' });
+        self.postMessage({ status: 'error', error: 'Unsupported language pair for offline translation.', id });
         return;
     }
 
@@ -41,20 +41,20 @@ self.addEventListener('message', async (event) => {
 
     try {
         if (currentModel !== modelName) {
-            self.postMessage({ status: 'loading', model: modelName });
+            self.postMessage({ status: 'loading', model: modelName, id });
             translator = await pipeline('translation', modelName, {
                 progress_callback: (x: any) => {
-                    self.postMessage({ status: 'progress', progress: x });
+                    self.postMessage({ status: 'progress', progress: x, id });
                 }
             });
             currentModel = modelName;
         }
 
-        self.postMessage({ status: 'translating' });
+        self.postMessage({ status: 'translating', id });
         const result = await translator(text);
-        self.postMessage({ status: 'complete', result: result[0].translation_text });
+        self.postMessage({ status: 'complete', result: result[0].translation_text, id });
     } catch (error: any) {
         console.error("Offline translation error:", error);
-        self.postMessage({ status: 'error', error: `Offline model not available for ${src} to ${tgt}. Try English to another language.` });
+        self.postMessage({ status: 'error', error: `Offline model not available for ${src} to ${tgt}. Try English to another language.`, id });
     }
 });

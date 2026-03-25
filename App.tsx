@@ -6,7 +6,7 @@ import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
 
 import { translateText, detectLanguage, getChatbotResponse, transcribeAudio } from './services/geminiService';
-import { LANGUAGES, ROLES } from './constants';
+import { LANGUAGES, ROLES, UI_LANG_TO_TARGET_LANG } from './constants';
 import { UI_TRANSLATIONS, UILanguage } from './i18n';
 import { SwapIcon, CopyIcon, CheckIcon, CloseIcon, MicrophoneIcon, UploadIcon, BookOpenIcon, ReuseIcon, TrashIcon, SpeakerIcon, ChatIcon, SendIcon, FullscreenIcon, MinimizeIcon, ChevronDownIcon } from './components/icons';
 
@@ -157,7 +157,7 @@ const App: React.FC = () => {
   const [phoneticText, setPhoneticText] = useState<string>('');
   const [sourceLang, setSourceLang] = useState<string>('Portuguese (Portugal)');
   const [targetLang, setTargetLang] = useState<string>('English (UK)');
-  const [role, setRole] = useState<string>(ROLES[0].name);
+  const [role, setRole] = useState<string>(ROLES[0].id);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [hasCopied, setHasCopied] = useState<boolean>(false);
@@ -181,6 +181,16 @@ const App: React.FC = () => {
   const [isAutoCorrectEnabled, setIsAutoCorrectEnabled] = useState<boolean>(true);
   const [uiLanguage, setUiLanguage] = useState<UILanguage>('pt'); // Default to PT as requested
   const [customProfession, setCustomProfession] = useState<string>('');
+  
+  const t = UI_TRANSLATIONS[uiLanguage];
+
+  // Effect to sync target language with UI language
+  useEffect(() => {
+    const targetLangName = UI_LANG_TO_TARGET_LANG[uiLanguage];
+    if (targetLangName) {
+      setTargetLang(targetLangName);
+    }
+  }, [uiLanguage]);
   const [generatedContent, setGeneratedContent] = useState<string>('');
   const [isGeneratingContent, setIsGeneratingContent] = useState<boolean>(false);
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -196,6 +206,8 @@ const App: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workerRef = useRef<Worker | null>(null);
   const lastTranslatedTextRef = useRef<string>('');
+  const detectionIdRef = useRef(0);
+  const translationIdRef = useRef(0);
   
   // Debounce input for language detection
   const [debouncedInputText, setDebouncedInputText] = useState(inputText);
@@ -219,6 +231,8 @@ const App: React.FC = () => {
 
     workerRef.current.addEventListener('message', (e) => {
       const data = e.data;
+      if (data.id && data.id !== translationIdRef.current) return;
+      
       if (data.status === 'progress') {
         setOfflineProgress({ status: 'progress', progress: data.progress.progress, model: data.progress.file });
       } else if (data.status === 'loading') {
@@ -275,41 +289,54 @@ const App: React.FC = () => {
   
   // Effect for automatic language detection
   useEffect(() => {
+    if (!isAutoDetectEnabled) {
+      setIsDetecting(false);
+      setDetectedLangMessage(null);
+      return;
+    }
+    
+    const detectionId = ++detectionIdRef.current;
+
     const runDetection = async () => {
-      if (!isAutoDetectEnabled) return;
-      
-      if (debouncedInputText.trim().length < 10) {
+      if (!debouncedInputText.trim() || debouncedInputText.trim().length < 10) {
         setDetectedLangMessage(null);
         return;
       }
 
       setIsDetecting(true);
-      setDetectedLangMessage('Detecting language...');
+      setDetectedLangMessage(t.detecting || 'Detecting language...');
       try {
         const detected = await detectLanguage(debouncedInputText, LANGUAGES.map(l => l.name));
+        
+        if (detectionId !== detectionIdRef.current) return;
+
         if (LANGUAGES.some(l => l.name === detected)) {
           setSourceLang(detected);
-          setDetectedLangMessage(`Detected: ${detected}`);
+          setDetectedLangMessage(`${t.detected || 'Detected'}: ${t[LANGUAGES.find(l => l.name === detected)?.nameKey as keyof typeof t] || detected}`);
         } else {
-          setDetectedLangMessage('Uncertain language. Please select manually.');
+          setDetectedLangMessage(t.uncertainLanguage || 'Uncertain language. Please select manually.');
         }
       } catch (err) {
-        setDetectedLangMessage('Uncertain language. Please select manually.');
+        if (detectionId !== detectionIdRef.current) return;
+        setDetectedLangMessage(t.uncertainLanguage || 'Uncertain language. Please select manually.');
       } finally {
-        setIsDetecting(false);
+        if (detectionId === detectionIdRef.current) {
+          setIsDetecting(false);
+        }
       }
     };
 
-    if (debouncedInputText) {
-      runDetection();
-    }
-  }, [debouncedInputText, isAutoDetectEnabled]);
+    runDetection();
+  }, [debouncedInputText, isAutoDetectEnabled, t]);
 
   // Effect for real-time translation (handles selected text or full debounced text)
   useEffect(() => {
-    if (!isAutoTranslateEnabled) return;
+    if (!isAutoTranslateEnabled) {
+      return;
+    }
     
     const textToTranslate = selectedText || debouncedInputText;
+    const translationId = ++translationIdRef.current;
 
     const autoTranslate = async () => {
       if (!textToTranslate.trim()) {
@@ -336,7 +363,8 @@ const App: React.FC = () => {
           workerRef.current.postMessage({
             text: textToTranslate,
             src: sourceLang,
-            tgt: targetLang
+            tgt: targetLang,
+            id: translationId
           });
         } else {
           setError("Offline translation worker not initialized.");
@@ -348,6 +376,8 @@ const App: React.FC = () => {
       try {
         const { correctedSource, translation, phonetic } = await translateText(textToTranslate, sourceLang, targetLang, role, isThinkingMode, isAutoCorrectEnabled, customProfession);
         
+        if (translationId !== translationIdRef.current) return;
+
         // Update the input text with the corrected source if it changed
         // ONLY if the user hasn't typed anything new while waiting for the API
         if (correctedSource && correctedSource !== textToTranslate && isAutoCorrectEnabled) {
@@ -388,14 +418,17 @@ const App: React.FC = () => {
         }
 
       } catch (err) {
+        if (translationId !== translationIdRef.current) return;
         setError(err instanceof Error ? err.message : 'An unknown error occurred.');
       } finally {
-        setIsLoading(false);
+        if (translationId === translationIdRef.current) {
+          setIsLoading(false);
+        }
       }
     };
 
     autoTranslate();
-  }, [selectedText, debouncedInputText, sourceLang, targetLang, role, isThinkingMode, isAutoCorrectEnabled]);
+  }, [selectedText, debouncedInputText, sourceLang, targetLang, role, isThinkingMode, isAutoCorrectEnabled, isAutoTranslateEnabled]);
   
   // Effect for speech synthesis cleanup
   useEffect(() => {
@@ -597,6 +630,7 @@ const App: React.FC = () => {
     const textToTranslate = selectedText || inputText;
     if (!textToTranslate.trim()) return;
 
+    const translationId = ++translationIdRef.current;
     setIsLoading(true);
     setError(null);
     setGeneratedContent('');
@@ -606,7 +640,8 @@ const App: React.FC = () => {
         workerRef.current.postMessage({
           text: textToTranslate,
           src: sourceLang,
-          tgt: targetLang
+          tgt: targetLang,
+          id: translationId
         });
       } else {
         setError("Offline translation worker not initialized.");
@@ -618,6 +653,8 @@ const App: React.FC = () => {
     try {
       const { correctedSource, translation, phonetic } = await translateText(textToTranslate, sourceLang, targetLang, role, isThinkingMode, isAutoCorrectEnabled, customProfession);
       
+      if (translationId !== translationIdRef.current) return;
+
       if (correctedSource && correctedSource !== textToTranslate && isAutoCorrectEnabled) {
         setInputText(correctedSource);
       }
@@ -637,9 +674,12 @@ const App: React.FC = () => {
       };
       setTranslationMemory(prev => [newEntry, ...prev].slice(0, 50));
     } catch (err) {
+      if (translationId !== translationIdRef.current) return;
       setError(err instanceof Error ? err.message : 'Translation failed');
     } finally {
-      setIsLoading(false);
+      if (translationId === translationIdRef.current) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -797,8 +837,6 @@ const App: React.FC = () => {
     };
   }, []);
 
-  const t = UI_TRANSLATIONS[uiLanguage];
-
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans flex flex-col items-center p-4 sm:p-6 lg:p-8 relative overflow-hidden">
       {/* Ambient Background */}
@@ -812,14 +850,14 @@ const App: React.FC = () => {
               onChange={(e) => setUiLanguage(e.target.value as UILanguage)}
               className="appearance-none bg-white/50 hover:bg-white/80 border border-slate-200 text-slate-600 text-sm font-medium py-2 pl-3 pr-8 rounded-full shadow-sm focus:outline-none transition-colors cursor-pointer"
             >
-              <option value="en">English</option>
-              <option value="pt">Português</option>
-              <option value="fr">Français</option>
-              <option value="de">Deutsch</option>
-              <option value="es">Español</option>
-              <option value="zh">中文</option>
-              <option value="da">Dansk</option>
-              <option value="fi">Suomi</option>
+              <option value="en">{t.langEnUk}</option>
+              <option value="pt">{t.langPt}</option>
+              <option value="fr">{t.langFr}</option>
+              <option value="de">{t.langDe}</option>
+              <option value="es">{t.langEs}</option>
+              <option value="zh">{t.langZh}</option>
+              <option value="da">{t.langDa}</option>
+              <option value="fi">{t.langFi}</option>
             </select>
             <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-500">
               <ChevronDownIcon className="w-4 h-4" />
@@ -855,8 +893,8 @@ const App: React.FC = () => {
                     className="w-full glass-input rounded-xl py-3 pl-4 pr-10 focus:outline-none transition duration-200 appearance-none cursor-pointer"
                   >
                     {ROLES.map((r) => (
-                      <option key={r.name} value={r.name} title={r.description} className="bg-white text-slate-900">
-                        {r.name}
+                      <option key={r.id} value={r.id} title={t[r.descKey]} className="bg-white text-slate-900">
+                        {t[r.nameKey]}
                       </option>
                     ))}
                     <option value="Custom Profession" title={t.customProfessionLabel} className="bg-white text-slate-900 font-semibold">
@@ -967,7 +1005,7 @@ const App: React.FC = () => {
                       ? <><strong className="font-semibold text-emerald-600">{t.offlineModeEnabled}</strong> {t.offlineModeEnabledDesc}</>
                       : isThinkingMode 
                           ? <><strong className="font-semibold text-sky-600">{t.thinkingModeEnabled}</strong> {t.thinkingModeEnabledDesc}</>
-                          : ROLES.find(r => r.name === role)?.description
+                          : t[ROLES.find(r => r.id === role)?.descKey as keyof typeof t] || ROLES.find(r => r.id === role)?.description
                   }
                 </p>
                 {offlineProgress && (
@@ -1001,7 +1039,7 @@ const App: React.FC = () => {
                   }}
                   className="w-full glass-input rounded-xl py-3 px-4 pr-10 focus:outline-none transition duration-200 appearance-none cursor-pointer font-medium"
                 >
-                  {LANGUAGES.map((lang) => <option key={lang.name} value={lang.name} className="bg-white">{lang.name}</option>)}
+                  {LANGUAGES.map((lang) => <option key={lang.name} value={lang.name} className="bg-white">{t[lang.nameKey as keyof typeof t] || lang.name}</option>)}
                 </select>
                 <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none flex items-center">
                   <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
@@ -1037,7 +1075,7 @@ const App: React.FC = () => {
                 onChange={(e) => setInputText(e.target.value)}
                 onMouseUp={handleSelectionChange}
                 onKeyUp={handleSelectionChange}
-                placeholder={isAutoTranslateEnabled ? "Type, paste, or dictate text to translate automatically..." : "Type, paste, or dictate text, then click Translate..."}
+                placeholder={isAutoTranslateEnabled ? t.inputPlaceholderAuto : t.inputPlaceholderManual}
                 className="w-full flex-grow min-h-[300px] glass-input rounded-xl p-5 pr-16 resize-none focus:outline-none transition duration-200 text-lg leading-relaxed placeholder:text-slate-400"
               />
               <div className="absolute top-4 right-4 flex flex-col gap-2">
@@ -1119,7 +1157,7 @@ const App: React.FC = () => {
                 onChange={(e) => setTargetLang(e.target.value)}
                 className="w-full glass-input rounded-xl py-3 px-4 pr-10 focus:outline-none transition duration-200 appearance-none cursor-pointer font-medium"
               >
-                {LANGUAGES.map((lang) => <option key={lang.name} value={lang.name} className="bg-white">{lang.name}</option>)}
+                {LANGUAGES.map((lang) => <option key={lang.name} value={lang.name} className="bg-white">{t[lang.nameKey as keyof typeof t] || lang.name}</option>)}
               </select>
               <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none flex items-center">
                 <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
