@@ -24,7 +24,8 @@ self.addEventListener('message', async (event) => {
         'Korean': 'ko',
         'Arabic': 'ar',
         'Hindi': 'hi',
-        'Portuguese (Portugal)': 'pt'
+        'Portuguese (Portugal)': 'pt',
+        'Latin': 'la'
     };
 
     const srcCode = langMap[src];
