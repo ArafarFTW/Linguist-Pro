@@ -13,7 +13,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
  * @param error The catched error object.
  * @param context A string describing the operation that failed.
  */
-function handleApiError(error: unknown, context: 'translation' | 'language detection' | 'chatbot'): never {
+function handleApiError(error: unknown, context: 'translation' | 'language detection' | 'chatbot' | 'content generation'): never {
     console.error(`Error during ${context}:`, error);
 
     if (error instanceof Error) {
@@ -67,17 +67,17 @@ export async function translateText(
         let systemInstruction = `You are an expert linguist and ${roleName}. ${roleDescription} `;
         
         if (isAutoCorrectEnabled) {
-            systemInstruction += `Your task is to first correct any grammatical, spelling, or stylistic errors in the original source text to make it sound natural and professional in its original language. Then, provide an expert-level translation of this corrected text and its corresponding International Phonetic Alphabet (IPA) transcription.
+            systemInstruction += `Your task is to first correct any grammatical, spelling, or stylistic errors in the original source text to make it sound natural and professional in its original language. Then, provide an expert-level translation of this corrected text and its corresponding phonetic pronunciation guide.
 - Correct the source text's grammar, punctuation, and phrasing.
 - Strictly adhere to all grammatical rules, including correct syntax, punctuation, and idiomatic expressions of the target language.`;
         } else {
-            systemInstruction += `Your task is to provide an expert-level translation of the source text exactly as written, without correcting its grammar or spelling, and provide its corresponding International Phonetic Alphabet (IPA) transcription.
+            systemInstruction += `Your task is to provide an expert-level translation of the source text exactly as written, without correcting its grammar or spelling, and provide its corresponding phonetic pronunciation guide.
 - Translate the text as faithfully as possible to the original input.
 - Strictly adhere to all grammatical rules, including correct syntax, punctuation, and idiomatic expressions of the target language.
 - The 'correctedSource' field should simply be the exact original text provided, without modifications.`;
         }
 
-        systemInstruction += `\n- Provide the IPA transcription for the complete translated text.
+        systemInstruction += `\n- Provide a phonetic pronunciation guide for the complete translated text. Use simple, readable syllables based on the phonetics and orthography of the SOURCE language (e.g., if translating from Portuguese to English, write the English pronunciation using Portuguese phonetic approximations) to help a layperson pronounce it easily. Do NOT use strict IPA symbols.
 - You MUST respond with a JSON object containing three keys: "correctedSource", "translation", and "phonetic". Do not add any other text or explanations.`;
         
         const prompt = `Translate the following text from ${sourceLang} to ${targetLang}:\n\n"${text}"`;
@@ -101,7 +101,7 @@ export async function translateText(
                     },
                     phonetic: {
                         type: Type.STRING,
-                        description: "The IPA phonetic transcription of the translation. Example: /həˈloʊ/"
+                        description: "A phonetic pronunciation guide for the translated text, written using simple syllables based on the phonetics and orthography of the source language, making it easy for a native speaker of the source language to read aloud."
                     }
                 },
                 required: ["correctedSource", "translation", "phonetic"],
@@ -130,6 +130,48 @@ export async function translateText(
 
     } catch (error) {
         handleApiError(error, 'translation');
+    }
+}
+
+export async function generateRepurposedContent(
+    translatedText: string,
+    targetLang: string,
+    format: string,
+    role: string,
+    customProfession?: string
+): Promise<string> {
+    try {
+        let roleDescription = '';
+        let roleName = role;
+        
+        if (role === 'Custom Profession' && customProfession) {
+            roleName = customProfession;
+            roleDescription = `You are an expert in the field of ${customProfession}.`;
+        } else {
+            const roleObj = ROLES.find(r => r.name === role);
+            roleDescription = roleObj ? roleObj.description : '';
+        }
+
+        const systemInstruction = `You are an expert linguist and ${roleName}. ${roleDescription}
+Your task is to take the provided translated text and repurpose it into a ${format}.
+The output MUST be written in ${targetLang}.
+Ensure the tone, style, and terminology are appropriate for a ${format} in the context of your role.
+Do not include any introductory or concluding remarks, just provide the final repurposed content.`;
+
+        const prompt = `Repurpose the following text into a ${format} in ${targetLang}:\n\n"${translatedText}"`;
+
+        const response = await ai.models.generateContent({
+            model: 'gemini-3.1-pro-preview',
+            contents: prompt,
+            config: {
+                systemInstruction: systemInstruction,
+                temperature: 0.7,
+            },
+        });
+
+        return response.text.trim();
+    } catch (error) {
+        handleApiError(error, 'content generation');
     }
 }
 

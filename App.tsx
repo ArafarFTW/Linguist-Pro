@@ -34,9 +34,11 @@ interface Message {
 
 interface ChatbotProps {
   onClose: () => void;
+  uiLanguage: UILanguage;
 }
 
-const Chatbot: React.FC<ChatbotProps> = ({ onClose }) => {
+const Chatbot: React.FC<ChatbotProps> = ({ onClose, uiLanguage }) => {
+  const t = UI_TRANSLATIONS[uiLanguage];
   const [messages, setMessages] = useState<Message[]>([
     { id: 'initial', text: "Hello! I'm your AI Assistant. I can provide up-to-date information and help with various tasks. How can I help you today?", sender: 'bot' }
   ]);
@@ -79,14 +81,14 @@ const Chatbot: React.FC<ChatbotProps> = ({ onClose }) => {
       <header className="flex items-center justify-between p-4 bg-slate-50 rounded-t-xl border-b border-slate-200 flex-shrink-0">
         <div className="flex items-center gap-3">
           <h2 className="text-lg font-semibold text-slate-900">AI Assistant</h2>
-          <label className="flex items-center gap-1.5 cursor-pointer text-xs">
+          <label className="flex items-center gap-1.5 cursor-pointer text-xs" title={t.useMapsDesc}>
             <input 
               type="checkbox" 
               checked={useMaps} 
               onChange={(e) => setUseMaps(e.target.checked)}
               className="rounded text-sky-600 focus:ring-sky-500"
             />
-            <span className="text-slate-600 font-medium">Use Maps</span>
+            <span className="text-slate-600 font-medium">{t.useMaps}</span>
           </label>
         </div>
         <button onClick={onClose} className="p-1 rounded-full text-slate-500 hover:bg-slate-200 hover:text-slate-900 transition-colors" title="Close chat">
@@ -175,9 +177,12 @@ const App: React.FC = () => {
   const [speechRate, setSpeechRate] = useState<number>(1);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [isAutoDetectEnabled, setIsAutoDetectEnabled] = useState<boolean>(true);
+  const [isAutoTranslateEnabled, setIsAutoTranslateEnabled] = useState<boolean>(true);
   const [isAutoCorrectEnabled, setIsAutoCorrectEnabled] = useState<boolean>(true);
   const [uiLanguage, setUiLanguage] = useState<UILanguage>('pt'); // Default to PT as requested
   const [customProfession, setCustomProfession] = useState<string>('');
+  const [generatedContent, setGeneratedContent] = useState<string>('');
+  const [isGeneratingContent, setIsGeneratingContent] = useState<boolean>(false);
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean;
     title: string;
@@ -302,12 +307,15 @@ const App: React.FC = () => {
 
   // Effect for real-time translation (handles selected text or full debounced text)
   useEffect(() => {
+    if (!isAutoTranslateEnabled) return;
+    
     const textToTranslate = selectedText || debouncedInputText;
 
     const autoTranslate = async () => {
       if (!textToTranslate.trim()) {
         setOutputText('');
         setPhoneticText('');
+        setGeneratedContent('');
         lastTranslatedTextRef.current = '';
         return;
       }
@@ -320,6 +328,7 @@ const App: React.FC = () => {
       
       setIsLoading(true);
       setError(null);
+      setGeneratedContent('');
 
       if (isOfflineMode) {
         if (workerRef.current) {
@@ -399,14 +408,20 @@ const App: React.FC = () => {
 
 
   const handleSwapLanguages = () => {
+    const oldInput = inputText;
+    const oldOutput = outputText;
     setSourceLang(targetLang);
     setTargetLang(sourceLang);
-    setInputText(outputText);
-    setOutputText(inputText);
+    setInputText(oldOutput);
+    setOutputText(oldInput);
     setPhoneticText('');
     setSelectedText('');
     setIsAutoDetectEnabled(false);
     setDetectedLangMessage('Manual selection');
+    
+    // If auto-translate is off and we have text, we might want to re-translate
+    // but usually swap means we just swapped the boxes.
+    // However, if the user wants to translate the new input, they'll click the button.
   };
   
   const handleCopyToClipboard = () => {
@@ -414,6 +429,23 @@ const App: React.FC = () => {
       navigator.clipboard.writeText(outputText);
       setHasCopied(true);
       setTimeout(() => setHasCopied(false), 2000);
+    }
+  };
+
+  const handleRepurposeContent = async (format: string) => {
+    if (!outputText) return;
+    setIsGeneratingContent(true);
+    setGeneratedContent('');
+    try {
+      const { generateRepurposedContent } = await import('./services/geminiService');
+      const content = await generateRepurposedContent(outputText, targetLang, format, role, customProfession);
+      if (content) {
+        setGeneratedContent(content);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An unknown error occurred while generating content.');
+    } finally {
+      setIsGeneratingContent(false);
     }
   };
 
@@ -558,6 +590,57 @@ const App: React.FC = () => {
     setPhoneticText('');
     setFileName(null);
     setSelectedText('');
+  };
+
+  // Manual translation function
+  const handleManualTranslate = async () => {
+    const textToTranslate = selectedText || inputText;
+    if (!textToTranslate.trim()) return;
+
+    setIsLoading(true);
+    setError(null);
+    setGeneratedContent('');
+
+    if (isOfflineMode) {
+      if (workerRef.current) {
+        workerRef.current.postMessage({
+          text: textToTranslate,
+          src: sourceLang,
+          tgt: targetLang
+        });
+      } else {
+        setError("Offline translation worker not initialized.");
+        setIsLoading(false);
+      }
+      return;
+    }
+
+    try {
+      const { correctedSource, translation, phonetic } = await translateText(textToTranslate, sourceLang, targetLang, role, isThinkingMode, isAutoCorrectEnabled, customProfession);
+      
+      if (correctedSource && correctedSource !== textToTranslate && isAutoCorrectEnabled) {
+        setInputText(correctedSource);
+      }
+      
+      setOutputText(translation);
+      setPhoneticText(phonetic);
+      
+      // Add to translation memory
+      const newEntry: TranslationEntry = {
+        id: Date.now().toString(),
+        sourceText: correctedSource || textToTranslate,
+        targetText: translation,
+        phoneticText: phonetic,
+        sourceLang,
+        targetLang,
+        role
+      };
+      setTranslationMemory(prev => [newEntry, ...prev].slice(0, 50));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Translation failed');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleClearInput = () => {
@@ -731,6 +814,12 @@ const App: React.FC = () => {
             >
               <option value="en">English</option>
               <option value="pt">Português</option>
+              <option value="fr">Français</option>
+              <option value="de">Deutsch</option>
+              <option value="es">Español</option>
+              <option value="zh">中文</option>
+              <option value="da">Dansk</option>
+              <option value="fi">Suomi</option>
             </select>
             <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-500">
               <ChevronDownIcon className="w-4 h-4" />
@@ -766,11 +855,11 @@ const App: React.FC = () => {
                     className="w-full glass-input rounded-xl py-3 pl-4 pr-10 focus:outline-none transition duration-200 appearance-none cursor-pointer"
                   >
                     {ROLES.map((r) => (
-                      <option key={r.name} value={r.name} className="bg-white text-slate-900">
+                      <option key={r.name} value={r.name} title={r.description} className="bg-white text-slate-900">
                         {r.name}
                       </option>
                     ))}
-                    <option value="Custom Profession" className="bg-white text-slate-900 font-semibold">
+                    <option value="Custom Profession" title={t.customProfessionLabel} className="bg-white text-slate-900 font-semibold">
                       {t.customProfessionOption}
                     </option>
                   </select>
@@ -792,7 +881,39 @@ const App: React.FC = () => {
               </div>
 
               <div className="flex-shrink-0 sm:pt-7 flex flex-col gap-3 min-w-[220px]">
-                <label htmlFor="autocorrect-toggle" className={`flex items-center justify-between p-2.5 rounded-xl border transition-colors cursor-pointer group ${isOfflineMode ? 'opacity-50 pointer-events-none' : ''} ${isAutoCorrectEnabled ? 'bg-indigo-50 border-indigo-200 shadow-sm' : 'bg-white/50 border-slate-200 hover:bg-indigo-50/50'}`} title="Automatically correct grammar and spelling of the input text before translating.">
+                <label htmlFor="autodetect-toggle" className={`flex items-center justify-between p-2.5 rounded-xl border transition-colors cursor-pointer group ${isOfflineMode ? 'opacity-50 pointer-events-none' : ''} ${isAutoDetectEnabled ? 'bg-amber-50 border-amber-200 shadow-sm' : 'bg-white/50 border-slate-200 hover:bg-amber-50/50'}`} title={t.autoDetectDesc}>
+                    <span className={`text-sm font-medium mr-3 transition-colors ${isAutoDetectEnabled ? 'text-amber-700' : 'text-slate-600 group-hover:text-amber-600'}`}>🔍 {t.autoDetect}</span>
+                    <div className="relative">
+                        <input
+                            type="checkbox"
+                            id="autodetect-toggle"
+                            className="sr-only peer"
+                            checked={isAutoDetectEnabled}
+                            onChange={() => setIsAutoDetectEnabled(prev => !prev)}
+                            disabled={isOfflineMode}
+                        />
+                        <div className="w-10 h-5 rounded-full bg-slate-200 peer-checked:bg-amber-500 transition-colors"></div>
+                        <div className="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transform peer-checked:translate-x-5 transition-transform"></div>
+                    </div>
+                </label>
+
+                <label htmlFor="autotranslate-toggle" className={`flex items-center justify-between p-2.5 rounded-xl border transition-colors cursor-pointer group ${isOfflineMode ? 'opacity-50 pointer-events-none' : ''} ${isAutoTranslateEnabled ? 'bg-rose-50 border-rose-200 shadow-sm' : 'bg-white/50 border-slate-200 hover:bg-rose-50/50'}`} title={t.autoTranslateDesc}>
+                    <span className={`text-sm font-medium mr-3 transition-colors ${isAutoTranslateEnabled ? 'text-rose-700' : 'text-slate-600 group-hover:text-rose-600'}`}>⚡ {t.autoTranslate}</span>
+                    <div className="relative">
+                        <input
+                            type="checkbox"
+                            id="autotranslate-toggle"
+                            className="sr-only peer"
+                            checked={isAutoTranslateEnabled}
+                            onChange={() => setIsAutoTranslateEnabled(prev => !prev)}
+                            disabled={isOfflineMode}
+                        />
+                        <div className="w-10 h-5 rounded-full bg-slate-200 peer-checked:bg-rose-500 transition-colors"></div>
+                        <div className="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transform peer-checked:translate-x-5 transition-transform"></div>
+                    </div>
+                </label>
+
+                <label htmlFor="autocorrect-toggle" className={`flex items-center justify-between p-2.5 rounded-xl border transition-colors cursor-pointer group ${isOfflineMode ? 'opacity-50 pointer-events-none' : ''} ${isAutoCorrectEnabled ? 'bg-indigo-50 border-indigo-200 shadow-sm' : 'bg-white/50 border-slate-200 hover:bg-indigo-50/50'}`} title={t.autoCorrectDesc}>
                     <span className={`text-sm font-medium mr-3 transition-colors ${isAutoCorrectEnabled ? 'text-indigo-700' : 'text-slate-600 group-hover:text-indigo-600'}`}>✨ {t.autoCorrect}</span>
                     <div className="relative">
                         <input
@@ -916,7 +1037,7 @@ const App: React.FC = () => {
                 onChange={(e) => setInputText(e.target.value)}
                 onMouseUp={handleSelectionChange}
                 onKeyUp={handleSelectionChange}
-                placeholder="Type, paste, or dictate text to translate automatically..."
+                placeholder={isAutoTranslateEnabled ? "Type, paste, or dictate text to translate automatically..." : "Type, paste, or dictate text, then click Translate..."}
                 className="w-full flex-grow min-h-[300px] glass-input rounded-xl p-5 pr-16 resize-none focus:outline-none transition duration-200 text-lg leading-relaxed placeholder:text-slate-400"
               />
               <div className="absolute top-4 right-4 flex flex-col gap-2">
@@ -949,6 +1070,19 @@ const App: React.FC = () => {
             >
               <SwapIcon className="w-6 h-6" />
             </button>
+
+            {!isAutoTranslateEnabled && (
+              <button
+                onClick={handleManualTranslate}
+                disabled={isLoading || !inputText.trim()}
+                className={`flex flex-col items-center justify-center gap-2 p-4 rounded-2xl transition-all duration-300 hover:scale-105 shadow-md border-2 ${isLoading || !inputText.trim() ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed' : 'bg-sky-500 text-white border-sky-400 hover:bg-sky-600 active:scale-95'}`}
+                title={t.translateBtn}
+              >
+                <BookOpenIcon className="w-6 h-6" />
+                <span className="text-xs font-bold uppercase tracking-wider">{t.translateBtn}</span>
+              </button>
+            )}
+
             <div className="text-center">
                 <input
                     type="file"
@@ -978,14 +1112,19 @@ const App: React.FC = () => {
 
           {/* Output Panel */}
           <div className="flex flex-col gap-3 glass-panel p-5 rounded-2xl">
-            <select
-              id="target-lang"
-              value={targetLang}
-              onChange={(e) => setTargetLang(e.target.value)}
-              className="w-full glass-input rounded-xl py-3 px-4 focus:outline-none transition duration-200 appearance-none cursor-pointer font-medium"
-            >
-              {LANGUAGES.map((lang) => <option key={lang.name} value={lang.name} className="bg-white">{lang.name}</option>)}
-            </select>
+            <div className="relative">
+              <select
+                id="target-lang"
+                value={targetLang}
+                onChange={(e) => setTargetLang(e.target.value)}
+                className="w-full glass-input rounded-xl py-3 px-4 pr-10 focus:outline-none transition duration-200 appearance-none cursor-pointer font-medium"
+              >
+                {LANGUAGES.map((lang) => <option key={lang.name} value={lang.name} className="bg-white">{lang.name}</option>)}
+              </select>
+              <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none flex items-center">
+                <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
+              </div>
+            </div>
             <div className="relative flex-grow flex flex-col bg-slate-100/50 rounded-xl border border-slate-200 overflow-hidden">
               <textarea
                 value={outputText}
@@ -1031,13 +1170,72 @@ const App: React.FC = () => {
                             <button
                                 onClick={handleSpeak}
                                 disabled={!('speechSynthesis' in window) || isSpeaking}
-                                className="mt-0.5 p-1.5 -ml-1.5 rounded-full hover:bg-sky-100 transition-colors disabled:cursor-not-allowed flex-shrink-0"
+                                className="mt-1 p-1.5 -ml-1.5 rounded-full hover:bg-sky-100 transition-colors disabled:cursor-not-allowed flex-shrink-0"
                                 title="Listen to pronunciation"
                             >
-                                <SpeakerIcon className={`w-4 h-4 ${isSpeaking ? 'text-sky-600 animate-pulse' : 'text-sky-600/50'}`} />
+                                <SpeakerIcon className={`w-5 h-5 ${isSpeaking ? 'text-sky-600 animate-pulse' : 'text-sky-600/50'}`} />
                             </button>
-                            <span className="text-sky-800/90 font-mono text-sm leading-relaxed break-words">{phoneticText}</span>
+                            <span className="text-sky-900 font-mono text-base md:text-lg leading-relaxed break-words tracking-wide">{phoneticText}</span>
                         </div>
+                    </div>
+                )}
+                
+                {outputText && !isLoading && (
+                    <div className="w-full px-5 py-4 border-t border-slate-200 bg-indigo-50/50">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                            <div className="text-[10px] font-bold uppercase tracking-widest text-indigo-600/70 flex items-center gap-2">
+                                {t.repurposeTranslation}
+                            </div>
+                            <div className="relative flex-grow sm:max-w-xs">
+                                <select
+                                    defaultValue=""
+                                    onChange={(e) => {
+                                        if (e.target.value) {
+                                            handleRepurposeContent(e.target.value);
+                                            e.target.value = ''; // Reset after selection
+                                        }
+                                    }}
+                                    className="w-full glass-input rounded-xl py-2 pl-4 pr-10 text-sm focus:outline-none transition duration-200 appearance-none cursor-pointer bg-white border-indigo-100 text-indigo-900"
+                                    disabled={isGeneratingContent}
+                                >
+                                    <option value="" disabled>{isGeneratingContent ? t.generatingContent : t.repurposePrompt}</option>
+                                    <option value="professional email">{t.repurposeEmail}</option>
+                                    <option value="presentation slides">{t.repurposePresentation}</option>
+                                    <option value="social media post">{t.repurposeSocial}</option>
+                                    <option value="newsletter">{t.repurposeNewsletter}</option>
+                                    <option value="formal letter">{t.repurposeLetter}</option>
+                                    <option value="blog post">{t.repurposeBlog}</option>
+                                    <option value="marketing brochure">{t.repurposeBrochure}</option>
+                                </select>
+                                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-indigo-400">
+                                    {isGeneratingContent ? (
+                                        <div className="w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin"></div>
+                                    ) : (
+                                        <ChevronDownIcon className="w-4 h-4" />
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        {generatedContent && (
+                            <div className="mt-4 p-4 bg-white rounded-xl border border-indigo-100 shadow-sm relative animate-fade-in">
+                                <div className="text-[10px] font-bold uppercase tracking-widest text-indigo-600/70 mb-2">
+                                    {t.generatedContentTitle}
+                                </div>
+                                <div className="text-slate-700 text-sm whitespace-pre-wrap leading-relaxed">
+                                    {generatedContent}
+                                </div>
+                                <button 
+                                    onClick={() => {
+                                        navigator.clipboard.writeText(generatedContent);
+                                    }} 
+                                    className="absolute top-3 right-3 p-1.5 rounded-full text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors" 
+                                    title={t.copy}
+                                >
+                                    <CopyIcon className="w-4 h-4" />
+                                </button>
+                            </div>
+                        )}
                     </div>
                 )}
             </div>
@@ -1127,7 +1325,7 @@ const App: React.FC = () => {
                         <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">{entry.sourceLang} → {entry.targetLang} <span className="text-sky-600/70 ml-2">({entry.role})</span></p>
                         <p className="text-slate-700 mb-3 text-sm leading-relaxed break-words">{entry.sourceText}</p>
                         <p className="text-emerald-800 text-sm leading-relaxed break-words">{entry.targetText}</p>
-                        {entry.phoneticText && <p className="text-sky-700/70 font-mono text-xs italic mt-2 break-words">{entry.phoneticText}</p>}
+                        {entry.phoneticText && <p className="text-sky-800 font-mono text-sm mt-2 break-words tracking-wide">{entry.phoneticText}</p>}
                       </div>
                       <div className="flex-shrink-0 flex items-center gap-2 self-start md:self-center">
                          <button onClick={() => handleReuseMemoryEntry(entry)} className="p-2.5 rounded-full hover:bg-slate-100 transition-colors" title={t.reuse}>
@@ -1160,7 +1358,7 @@ const App: React.FC = () => {
           {isChatVisible ? <CloseIcon className="w-8 h-8"/> : <ChatIcon className="w-8 h-8" />}
       </button>
 
-      {isChatVisible && <Chatbot onClose={handleToggleChat} />}
+      {isChatVisible && <Chatbot onClose={handleToggleChat} uiLanguage={uiLanguage} />}
 
       {/* Confirmation Dialog */}
       {confirmDialog?.isOpen && (
