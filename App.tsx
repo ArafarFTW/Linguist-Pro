@@ -295,14 +295,15 @@ const App: React.FC = () => {
       return;
     }
     
-    const detectionId = ++detectionIdRef.current;
-
     const runDetection = async () => {
       if (!debouncedInputText.trim() || debouncedInputText.trim().length < 10) {
+        detectionIdRef.current++; // Cancel any running detection
         setDetectedLangMessage(null);
+        setIsDetecting(false);
         return;
       }
 
+      const detectionId = ++detectionIdRef.current;
       setIsDetecting(true);
       setDetectedLangMessage(t.detecting || 'Detecting language...');
       try {
@@ -334,16 +335,22 @@ const App: React.FC = () => {
     if (!isAutoTranslateEnabled) {
       return;
     }
+    if (isAutoDetectEnabled && isDetecting) {
+      translationIdRef.current++; // Cancel any running translation
+      setIsLoading(false);
+      return; // Wait for language detection to finish
+    }
     
     const textToTranslate = selectedText || debouncedInputText;
-    const translationId = ++translationIdRef.current;
 
     const autoTranslate = async () => {
       if (!textToTranslate.trim()) {
+        translationIdRef.current++; // Cancel any running translation
         setOutputText('');
         setPhoneticText('');
         setGeneratedContent('');
         lastTranslatedTextRef.current = '';
+        setIsLoading(false);
         return;
       }
       
@@ -353,6 +360,7 @@ const App: React.FC = () => {
         return; // Already translated this exact text with these settings
       }
       
+      const translationId = ++translationIdRef.current;
       setIsLoading(true);
       setError(null);
       setGeneratedContent('');
@@ -428,7 +436,7 @@ const App: React.FC = () => {
     };
 
     autoTranslate();
-  }, [selectedText, debouncedInputText, sourceLang, targetLang, role, isThinkingMode, isAutoCorrectEnabled, isAutoTranslateEnabled]);
+  }, [selectedText, debouncedInputText, sourceLang, targetLang, role, isThinkingMode, isAutoCorrectEnabled, isAutoTranslateEnabled, isAutoDetectEnabled, isDetecting]);
   
   // Effect for speech synthesis cleanup
   useEffect(() => {

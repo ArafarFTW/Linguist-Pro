@@ -205,6 +205,34 @@ export const ROLES: Role[] = [
     nameKey: 'roleMedicalName', 
     descKey: 'roleMedicalDesc' 
   },
+  { 
+    id: 'american', 
+    name: 'American Long-Haul Groups Specialist',
+    description: 'Specializes in communicating with American long-haul tourist groups. Uses enthusiastic, service-oriented language with clear, direct information. Focuses on high-value experiences, convenience, and exceptional customer service. Key scenarios: explaining "all-inclusive packages", "VIP access", and "premium golf experiences".',
+    nameKey: 'roleAmericanName', 
+    descKey: 'roleAmericanDesc' 
+  },
+  { 
+    id: 'canadian', 
+    name: 'Canadian Long-Haul Groups Specialist',
+    description: 'Specializes in communicating with Canadian long-haul tourist groups. Adapts to their specific characteristics by using polite, friendly, and accommodating language. Highlights value, nature, and community aspects of the resort experience. Key scenarios: detailing "extended stay options", "outdoor activities", and "group dining arrangements".',
+    nameKey: 'roleCanadianName', 
+    descKey: 'roleCanadianDesc' 
+  },
+  { 
+    id: 'australian', 
+    name: 'Australian Long-Haul Groups Specialist',
+    description: 'Specializes in communicating with Australian long-haul tourist groups. Adapts to their specific characteristics by using a relaxed, matey, yet professional tone. Emphasizes social aspects, good value, and authentic experiences. Key scenarios: promoting "19th hole specials", "group tournaments", and "local excursions".',
+    nameKey: 'roleAustralianName', 
+    descKey: 'roleAustralianDesc' 
+  },
+  { 
+    id: 'korean', 
+    name: 'South Korean Groups Specialist',
+    description: 'Specializes in communicating with South Korean tourist groups. Uses highly respectful, formal, and detail-oriented language. Emphasizes prestige, quality, and meticulous planning. Key scenarios: arranging "exclusive tee times", detailing "luxury amenities", and coordinating "structured group itineraries".',
+    nameKey: 'roleKoreanName', 
+    descKey: 'roleKoreanDesc' 
+  },
 ];
 
 export const UI_LANG_TO_TARGET_LANG: Record<string, string> = {
