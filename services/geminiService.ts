@@ -69,11 +69,13 @@ export async function translateText(
         if (isAutoCorrectEnabled) {
             systemInstruction += `Your task is to first correct any grammatical, spelling, or stylistic errors in the original source text to make it sound natural and professional in its original language. Then, provide an expert-level translation of this corrected text and its corresponding phonetic pronunciation guide.
 - Correct the source text's grammar, punctuation, and phrasing.
-- Strictly adhere to all grammatical rules, including correct syntax, punctuation, and idiomatic expressions of the target language.`;
+- In your translation, you MUST present the correct and corrected grammatical forms according to all rules of the target language. Ensure perfect syntax, morphology, agreement, punctuation, and idiomatic usage.
+- CRITICAL: After verifying grammatical correctness, the form, tone, body, and meaning of the text MUST strictly align with your assigned persona (${roleName}).`;
         } else {
             systemInstruction += `Your task is to provide an expert-level translation of the source text exactly as written, without correcting its grammar or spelling, and provide its corresponding phonetic pronunciation guide.
 - Translate the text as faithfully as possible to the original input.
-- Strictly adhere to all grammatical rules, including correct syntax, punctuation, and idiomatic expressions of the target language.
+- In your translation, you MUST present the correct and corrected grammatical forms according to all rules of the target language. Ensure perfect syntax, morphology, agreement, punctuation, and idiomatic usage.
+- CRITICAL: After verifying grammatical correctness, the form, tone, body, and meaning of the text MUST strictly align with your assigned persona (${roleName}).
 - The 'correctedSource' field should simply be the exact original text provided, without modifications.`;
         }
 
@@ -156,6 +158,8 @@ export async function generateRepurposedContent(
 Your task is to take the provided translated text and repurpose it into a ${format}.
 The output MUST be written in ${targetLang}.
 Ensure the tone, style, and terminology are appropriate for a ${format} in the context of your role.
+You MUST present the correct and corrected grammatical forms according to all rules of the target language. Ensure perfect syntax, morphology, agreement, punctuation, and idiomatic usage.
+CRITICAL: After verifying grammatical correctness, the form, tone, body, and meaning of the text MUST strictly align with your assigned persona (${roleName}).
 Do not include any introductory or concluding remarks, just provide the final repurposed content.`;
 
         const prompt = `Repurpose the following text into a ${format} in ${targetLang}:\n\n"${translatedText}"`;
@@ -235,7 +239,9 @@ interface ChatbotResponse {
 
 export async function getChatbotResponse(prompt: string, useMaps: boolean = false): Promise<ChatbotResponse> {
     try {
-        const systemInstruction = `You are an official translator, having all languages of the world as your field, but having as an initial basis always the translation from Portuguese of Portugal to English of England, always using a professional language linked to tourism in general and golf in particular. You can also answer questions and provide information related to these fields.`;
+        const systemInstruction = `You are an official translator, having all languages of the world as your field, but having as an initial basis always the translation from Portuguese of Portugal to English of England, always using a professional language linked to tourism in general and golf in particular. You can also answer questions and provide information related to these fields.
+In your translations and responses, you MUST present the correct and corrected grammatical forms according to all rules of the target language. Ensure perfect syntax, morphology, agreement, punctuation, and idiomatic usage.
+CRITICAL: After verifying grammatical correctness, the form, tone, body, and meaning of the text MUST strictly align with your assigned persona as an official translator for tourism and golf.`;
         
         const model = useMaps ? "gemini-2.5-flash" : "gemini-3.1-pro-preview";
         const tools = useMaps ? [{ googleMaps: {} }] : [{ googleSearch: {} }];

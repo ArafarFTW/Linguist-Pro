@@ -452,9 +452,10 @@ const App: React.FC = () => {
     setIsAutoDetectEnabled(false);
     setDetectedLangMessage('Manual selection');
     
-    // If auto-translate is off and we have text, we might want to re-translate
-    // but usually swap means we just swapped the boxes.
-    // However, if the user wants to translate the new input, they'll click the button.
+    translationIdRef.current++;
+    setIsLoading(false);
+    detectionIdRef.current++;
+    setIsDetecting(false);
   };
   
   const handleCopyToClipboard = () => {
@@ -691,6 +692,10 @@ const App: React.FC = () => {
     setSelectedText('');
     setIsAutoDetectEnabled(true);
     setDetectedLangMessage(null);
+    translationIdRef.current++;
+    setIsLoading(false);
+    detectionIdRef.current++;
+    setIsDetecting(false);
   };
 
 
@@ -788,6 +793,11 @@ const App: React.FC = () => {
     setIsAutoDetectEnabled(false);
     setDetectedLangMessage('Loaded from memory');
     window.scrollTo({ top: 0, behavior: 'smooth' });
+    
+    translationIdRef.current++;
+    setIsLoading(false);
+    detectionIdRef.current++;
+    setIsDetecting(false);
   };
 
   const handleClearMemory = () => {
@@ -927,7 +937,14 @@ const App: React.FC = () => {
                             id="autodetect-toggle"
                             className="sr-only peer"
                             checked={isAutoDetectEnabled}
-                            onChange={() => setIsAutoDetectEnabled(prev => !prev)}
+                            onChange={() => {
+                                if (isAutoDetectEnabled) {
+                                    detectionIdRef.current++;
+                                    setIsDetecting(false);
+                                    setDetectedLangMessage(null);
+                                }
+                                setIsAutoDetectEnabled(!isAutoDetectEnabled);
+                            }}
                             disabled={isOfflineMode}
                         />
                         <div className="w-10 h-5 rounded-full bg-slate-200 peer-checked:bg-amber-500 transition-colors"></div>
@@ -943,7 +960,13 @@ const App: React.FC = () => {
                             id="autotranslate-toggle"
                             className="sr-only peer"
                             checked={isAutoTranslateEnabled}
-                            onChange={() => setIsAutoTranslateEnabled(prev => !prev)}
+                            onChange={() => {
+                                if (isAutoTranslateEnabled) {
+                                    translationIdRef.current++;
+                                    setIsLoading(false);
+                                }
+                                setIsAutoTranslateEnabled(!isAutoTranslateEnabled);
+                            }}
                             disabled={isOfflineMode}
                         />
                         <div className="w-10 h-5 rounded-full bg-slate-200 peer-checked:bg-rose-500 transition-colors"></div>
